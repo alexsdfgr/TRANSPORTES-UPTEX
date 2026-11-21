@@ -37,6 +37,29 @@ const schema = `
     role TEXT NOT NULL CHECK(role IN ('admin', 'driver', 'student', 'teacher')),
     password TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1
   );
+  CREATE TABLE IF NOT EXISTS passenger_profiles (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    qr_token TEXT NOT NULL UNIQUE
+  );
+  CREATE TABLE IF NOT EXISTS vehicles (
+    id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
+    name TEXT NOT NULL, plate TEXT NOT NULL UNIQUE, model TEXT NOT NULL DEFAULT '', capacity INTEGER NOT NULL DEFAULT 20,
+    active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS reservations (
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), route_id INTEGER NOT NULL REFERENCES routes(id),
+    stop_id INTEGER NOT NULL REFERENCES stops(id), service_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'reserved',
+    created_at TEXT NOT NULL, UNIQUE(user_id,service_date)
+  );
+  CREATE TABLE IF NOT EXISTS boardings (
+    id INTEGER PRIMARY KEY, reservation_id INTEGER NOT NULL REFERENCES reservations(id),
+    driver_id INTEGER NOT NULL REFERENCES users(id), vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
+    boarded_at TEXT NOT NULL, alighted_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS driver_locations (
+    driver_id INTEGER PRIMARY KEY REFERENCES users(id), route_id INTEGER NOT NULL REFERENCES routes(id),
+    lat REAL NOT NULL, lng REAL NOT NULL, updated_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS routes (
     id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, name TEXT NOT NULL, zone TEXT NOT NULL,
     color TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('active','draft')),
@@ -73,6 +96,9 @@ export function openStore(path, { demo, adminEmail, adminPassword }) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec(schema);
+  const missingProfiles = db.prepare("SELECT id FROM users WHERE role IN ('student','teacher') AND id NOT IN (SELECT user_id FROM passenger_profiles)").all();
+  const createProfile = db.prepare('INSERT OR IGNORE INTO passenger_profiles(user_id,qr_token) VALUES(?,?)');
+  for (const { id } of missingProfiles) createProfile.run(id, randomBytes(32).toString('hex'));
   const initialized = db.prepare("SELECT value FROM settings WHERE key = 'mode'").get();
   if (initialized && initialized.value !== (demo ? 'demo' : 'operation')) {
     throw new Error('Usa una base distinta al cambiar DEMO_MODE.');
@@ -103,6 +129,8 @@ export function openStore(path, { demo, adminEmail, adminPassword }) {
     }
     db.prepare('INSERT INTO settings VALUES(?,?)').run('mode', demo ? 'demo' : 'operation');
   });
+  const profilesToCreate = db.prepare("SELECT id FROM users WHERE role IN ('student','teacher') AND id NOT IN (SELECT user_id FROM passenger_profiles)").all();
+  for (const { id } of profilesToCreate) createProfile.run(id, randomBytes(32).toString('hex'));
   return db;
 }
 

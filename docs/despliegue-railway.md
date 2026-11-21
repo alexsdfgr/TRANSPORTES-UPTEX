@@ -10,7 +10,7 @@ En PowerShell, desde la carpeta del proyecto:
 
 ```powershell
 Set-Location 'C:\Users\aleja\OneDrive\Documents\TRANSPORTES UPTEX'
-git add public/app.js public/index.html public/manifest.webmanifest public/styles.css public/sw.js public/uptex-logo.png
+git add public/app.js public/index.html public/manifest.webmanifest public/styles.css public/sw.js public/uptex-logo.jpg
 git commit -m "Actualizar marca UPTex con identidad verde"
 git push origin main
 ```

@@ -46,9 +46,9 @@ h3 { font-size: 1.05rem; font-weight: 730; letter-spacing: -.02em; }
   background: var(--navy);
   background-image: var(--nav-gradient);
 }
-.brand-logo { width: 171px; height: auto; display: block; object-fit: contain; }
+.brand-logo { width: 132px; height: 132px; display: block; object-fit: contain; background: white; border-radius: 9px; }
 .brand, .mobile-brand { display: flex; align-items: center; gap: 11px; }
-.brand { padding: 24px 16px 27px 21px; min-height: 93px; border-bottom: 1px solid #ffffff12; white-space: nowrap; }
+.brand { justify-content: center; padding: 15px; min-height: 162px; border-bottom: 1px solid #ffffff12; white-space: nowrap; }
 .brand-icon { width: 42px; height: 42px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 11px; background: #72c35b; color: #fff; box-shadow: 0 4px 11px #06122d5c; }
 .brand strong, .mobile-brand strong { display: block; color: #fff; font-size: .94rem; font-weight: 750; letter-spacing: -.02em; }
 .brand small { color: #a7c6ac; display: block; font-size: .73rem; margin-top: 2px; }
@@ -63,7 +63,7 @@ h3 { font-size: 1.05rem; font-weight: 730; letter-spacing: -.02em; }
 .side-help { width: 100%; color: #bcc9e1; display: flex; align-items: center; gap: 11px; border: 0; background: transparent; text-align: left; border-radius: 8px; padding: 11px; font-size: .875rem; }
 .side-help:hover { background: #ffffff14; color: white; }
 .side-help svg:last-child { margin-left: auto; }
-.campus-brand { display: flex; align-items: center; gap: 10px; margin-top: 15px; padding: 17px 5px 2px; border-top: 1px solid #ffffff1b; }
+.campus-brand { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 15px; padding: 14px 5px 2px; border-top: 1px solid #ffffff1b; }
 .campus-brand strong { color: #fff; font-size: .88rem; display: block; }
 .campus-brand small { display: block; color: #a5b5d1; font-size: .67rem; line-height: 1.28; }
 .campus-logo { background: #294b35; color: #b6d8ad; display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 auto; border-radius: 8px; }
@@ -277,7 +277,7 @@ form[data-form] { display: grid; gap: 11px; }
 
 @media (max-width: 1180px) {
   :root { --side: 208px; }
-  .brand { padding-left: 16px; gap: 8px; }
+  .brand { padding: 12px; gap: 8px; }
   .brand-icon { width: 39px; height: 39px; }
   .stat { padding: 13px 10px; gap: 9px; }
   .stat-icon { width: 34px; height: 34px; }
@@ -299,6 +299,7 @@ form[data-form] { display: grid; gap: 11px; }
   .topbar { padding: 0 12px; background: var(--navy); gap: 6px; }
   .mobile-brand, .mobile-install { display: flex; }
   .mobile-brand { gap: 7px; white-space: nowrap; }
+  .mobile-brand .brand-logo { width: 43px; height: 43px; }
   .mobile-brand strong { font-size: .88rem; }
   .topbar .brand-icon { width: 33px; height: 33px; border-radius: 8px; }
   .top-actions { gap: 4px; }
@@ -347,5 +348,15 @@ form[data-form] { display: grid; gap: 11px; }
 
 
 
-@media (max-width: 680px) { .brand-logo { width: 116px; } }
-.campus-full-logo { width: 142px; height: auto; display: block; object-fit: contain; }
+.campus-full-logo { width: 116px; height: 116px; display: block; object-fit: contain; background: white; border-radius: 8px; }
+.passenger-card, .driver-manifest, .live-locations { padding: 17px; margin-bottom: 14px; }
+.passenger-card > p { color: var(--muted); margin: 6px 0 12px; }
+#passenger-qr { display: block; width: min(220px, 70vw); height: auto; margin: 12px auto; }
+.qr-token { display: block; margin: 8px auto 16px; max-width: 100%; overflow-wrap: anywhere; text-align: center; color: var(--muted); font-size: .72rem; }
+.ride-details { display: grid; grid-template-columns: repeat(auto-fit,minmax(145px,1fr)); gap: 9px; }
+.ride-details div { padding: 9px 10px; background: #f1f7f0; border-radius: 7px; }
+.ride-details dt { color: var(--muted); font-size: .76rem; }
+.ride-details dd { font-weight: 670; overflow-wrap: anywhere; }
+.driver-manifest > p { color: var(--muted); margin-top: 8px; }
+.location-status { margin-top: 8px; color: var(--muted); font-size: .8rem; }
+#qr-camera { width: min(100%, 440px); max-height: 55dvh; margin: 12px auto; border-radius: 10px; background: #102018; }

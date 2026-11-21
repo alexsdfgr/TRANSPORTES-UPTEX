@@ -22,9 +22,10 @@ const calendar = new Intl.DateTimeFormat('es-MX', { day: 'numeric', month: 'long
 const clock = new Intl.DateTimeFormat('es-MX', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'America/Mexico_City' });
 
 const state = {
-  user: null, config: {}, routes: [], notices: [], admin: null, hasData: false, offline: false,
+  user: null, config: {}, routes: [], notices: [], admin: null, ride: null, driverData: null, hasData: false, offline: false,
   selectedId: null, stop: 0, page: 'inicio', adminTab: 'rutas',
   map: null, estimate: null, showTraffic: false, noticeFilter: 'all', scheduleFilter: 'all',
+  registerMode: false, scanAction: 'board', locationWatchId: null,
 };
 let flashTimeout;
 let installPrompt;
@@ -69,6 +70,8 @@ async function refresh() {
   Object.assign(state, data, { hasData: true, offline: Boolean(data.offline) });
   if (state.user?.role === 'admin') state.admin = await api('admin/state');
   else state.admin = null;
+  state.ride = ['student','teacher'].includes(state.user?.role) ? await api('my/ride') : null;
+  state.driverData = state.user?.role === 'driver' ? await api('driver/state') : null;
   if (!state.routes.some((route) => route.id === state.selectedId)) {
     state.selectedId = state.routes[0]?.id ?? null;
     state.stop = 0;
@@ -94,20 +97,22 @@ function initials(label) {
 function renderNav() {
   const links = [...navigation];
   if (state.user?.role === 'admin') links.push(['gestion', 'Administración', 'shield']);
+  if (['student','teacher'].includes(state.user?.role)) links.push(['mi-viaje','Mi viaje','route']);
+  if (state.user?.role === 'driver') links.push(['chofer','Módulo de chofer','bus']);
   const unread = state.notices.filter((notice) => !notice.isRead).length;
   const navLink = ([key, label, glyph], mobile = false) => {
-    const name = mobile ? { inicio: 'Inicio', rutas: 'Rutas', horarios: 'Horarios', avisos: 'Avisos', gestion: 'Gestión' }[key] : label;
+    const name = mobile ? { inicio: 'Inicio', rutas: 'Rutas', horarios: 'Horarios', avisos: 'Avisos', gestion: 'Gestión', 'mi-viaje':'Mi viaje', chofer:'Chofer' }[key] : label;
     return '<a href="#' + key + '" class="nav-link' + (state.page === key ? ' current' : '') + '"' + (state.page === key ? ' aria-current="page"' : '') + '>'
       + icon(glyph, mobile ? 19 : 19) + '<span>' + name + '</span>'
       + (key === 'avisos' && unread && !mobile ? '<span class="nav-count">' + unread + '</span>' : '') + '</a>';
   };
-  sidebar.innerHTML = '<a class="brand" href="#inicio" aria-label="Transporte UPTex, inicio"><img class="brand-logo" src="/uptex-logo.png" alt="UPTex, transporte universitario"></a>'
+  sidebar.innerHTML = '<a class="brand" href="#inicio" aria-label="Transporte UPTex, inicio"><img class="brand-logo" src="/uptex-logo.jpg" alt="UPTex, transporte universitario"></a>'
     + '<div class="side-content"><span class="side-label">MENÚ PRINCIPAL</span><nav>' + links.map((link) => navLink(link)).join('') + '</nav></div>'
     + '<div class="side-bottom"><button class="side-help" data-action="install">' + icon('phone', 18) + '<span>App móvil</span>' + icon('chevron', 14) + '</button>'
-    + '<div class="campus-brand"><img class="campus-full-logo" src="/uptex-logo.png" alt="UPTex, transporte universitario"></div></div>';
+    + '<div class="campus-brand"><img class="campus-full-logo" src="/uptex-logo.jpg" alt="UPTex, transporte universitario"></div></div>';
   mobileNav.innerHTML = links.map((link) => navLink(link, true)).join('');
   const label = links.find(([key]) => key === state.page)?.[1] ?? 'Panel general';
-  topbar.innerHTML = '<a class="mobile-brand" href="#inicio"><img class="brand-logo" src="/uptex-logo.png" alt="UPTex"></a>'
+  topbar.innerHTML = '<a class="mobile-brand" href="#inicio"><img class="brand-logo" src="/uptex-logo.jpg" alt="UPTex"></a>'
     + '<div class="breadcrumb"><span>Transporte</span>' + icon('chevron', 14) + '<strong>' + label + '</strong></div>'
     + '<div class="top-actions"><button class="icon-button mobile-install" data-action="install" aria-label="Instalar app móvil" title="App móvil">' + icon('phone', 19) + '</button>'
     + '<a class="icon-button notifications" href="#avisos" aria-label="Ver avisos" title="Avisos">' + icon('bell', 20) + (unread ? '<i></i>' : '') + '</a><span class="top-divider"></span>'
@@ -305,11 +310,28 @@ function noticesPage() {
     + '<div class="notice-list">' + (notices.map((notice) => noticeCard(notice)).join('') || empty('bell', 'No hay avisos de este tipo.')) + '</div>';
 }
 
+function passengerPage() {
+  const routes=state.ride?.routes??state.routes;const reservation=state.ride?.reservation;
+  const qr='<canvas id="passenger-qr" width="220" height="220" aria-label="QR personal de abordaje"></canvas>';
+  const routeId=reservation?.routeId??state.selectedId??routes[0]?.id;
+  const form='<form data-form="reservation"><label class="field">Ruta<select name="routeId" data-passenger-route required>'+routes.map(r=>option(r.id,r.code+' · '+r.name,routeId)).join('')+'</select></label><label class="field">Parada para abordar<select name="stopId" required>'+((routes.find(r=>String(r.id)===String(routeId))??routes[0])?.stops??[]).map(s=>option(s.id,s.name,reservation?.stopId)).join('')+'</select></label>'+submitButtons(reservation?'Actualizar viaje':'Reservar viaje')+'</form>';
+  const details=reservation?'<dl class="ride-details"><div><dt>Ruta</dt><dd>'+escape(reservation.code+' · '+reservation.route)+'</dd></div><div><dt>Parada</dt><dd>'+escape(reservation.stop)+'</dd></div><div><dt>Unidad</dt><dd>'+escape(reservation.vehicle?(reservation.vehicle+' · '+reservation.plate):'Se confirma al abordar')+'</dd></div><div><dt>Chofer</dt><dd>'+escape(reservation.driver??'Pendiente de asignar')+'</dd></div><div><dt>Ingreso</dt><dd>'+escape(reservation.boardedAt?clock.format(new Date(reservation.boardedAt)):'Pendiente')+'</dd></div><div><dt>Salida</dt><dd>'+escape(reservation.alightedAt?clock.format(new Date(reservation.alightedAt)):'Pendiente')+'</dd></div></dl>':'<p>Aún no tienes una reservación para hoy.</p>';
+  main.innerHTML=heading('Mi viaje','Selecciona tu ruta y la parada donde esperarás la unidad.')+'<section class="card passenger-card"><h2>Mi QR personal</h2><p>El QR usa un identificador privado. El chofer lo escanea al subir y al bajar.</p>'+qr+'<code class="qr-token">'+escape(state.ride?.qrToken??'')+'</code>'+details+'</section><section class="card passenger-card"><h2>Reservar ruta y parada</h2>'+form+'</section>';
+  if(state.ride?.qrToken&&window.QRCode)QRCode.toCanvas(document.querySelector('#passenger-qr'),state.ride.qrToken,{width:220,margin:2}).catch(()=>{});
+}
+
+function driverPage() {
+  const d=state.driverData??{assignments:[],vehicle:null};const assignments=d.assignments??[];
+  const passengers=d.passengers??[];
+  const manifest='<section class="card driver-manifest"><h2>Pasajeros de hoy</h2>'+(passengers.length?'<div class="table-wrap"><table><thead><tr><th>Pasajero</th><th>Parada</th><th>Abordaje</th><th>Bajada</th></tr></thead><tbody>'+passengers.map(p=>'<tr><td>'+escape(p.name)+'</td><td>'+escape(p.stop)+'</td><td>'+escape(p.boardedAt?clock.format(new Date(p.boardedAt)):'Pendiente')+'</td><td>'+escape(p.alightedAt?clock.format(new Date(p.alightedAt)):'Pendiente')+'</td></tr>').join('')+'</tbody></table></div>':'<p>Aún no hay personas registradas en tu ruta de hoy.</p>')+'</section>';
+  main.innerHTML=heading('Módulo de chofer','Registra tu unidad; coordinación te asigna la ruta y aquí verás los abordajes.')+'<section class="card passenger-card"><h2>Unidad</h2><form data-form="vehicle">'+input('Nombre o número económico','name',d.vehicle?.name??'',{required:true,max:80})+input('Placas','plate',d.vehicle?.plate??'',{required:true,max:16})+input('Modelo','model',d.vehicle?.model??'',{max:80})+input('Capacidad','capacity',d.vehicle?.capacity??20,{type:'number',min:1,max:100})+submitButtons('Guardar unidad')+'</form></section><section class="card passenger-card"><h2>Ruta asignada</h2>'+ (assignments.map(r=>'<p><b>'+escape(r.code)+' · '+escape(r.name)+'</b> · '+escape(r.departure??'Horario por confirmar')+'</p>').join('')||'<p>Coordinación aún no te asigna ruta.</p>') +'<button class="button secondary" data-action="location">Compartir ubicación en vivo</button><p class="location-status" id="location-status" aria-live="polite">'+(d.locationUpdatedAt?'Ubicación actualizada: '+escape(clock.format(new Date(d.locationUpdatedAt))):'La ubicación solo se comparte mientras el chofer activa esta opción.')+'</p></section><section class="card passenger-card"><h2>Escanear QR</h2><p>Escanea para registrar subida o bajada. Si tu navegador no permite cámara, puedes pegar el identificador manualmente.</p><video id="qr-camera" playsinline hidden></video><canvas id="qr-frame" hidden></canvas><button class="button secondary" data-action="scan-camera">Abrir cámara</button><button class="button secondary" data-action="scan-mode">'+(state.scanAction==='board'?'Modo actual: abordar · cambiar a bajar':'Modo actual: bajar · cambiar a abordar')+'</button><form data-form="scan" data-scan-action="'+state.scanAction+'"><label class="field">Código QR<input name="qrToken" autocomplete="off" required></label><p class="form-error" role="alert" hidden></p><button class="button primary" type="submit">Registrar '+(state.scanAction==='board'?'abordaje':'bajada')+'</button></form><div id="scan-result" aria-live="polite"></div></section>'+manifest;
+}
+
 function render() {
   state.map?.destroy();
   state.map = null;
   const hash = location.hash.slice(1);
-  const permitted = [...navigation.map(([key]) => key), ...(state.user?.role === 'admin' ? ['gestion'] : [])];
+  const permitted = [...navigation.map(([key]) => key), ...(state.user?.role === 'admin' ? ['gestion'] : []), ...(['student','teacher'].includes(state.user?.role)?['mi-viaje']:[]), ...(state.user?.role==='driver'?['chofer']:[])];
   state.page = permitted.includes(hash) ? hash : 'inicio';
   renderNav();
   main.setAttribute('aria-busy', 'false');
@@ -319,12 +341,12 @@ function render() {
       + '<button class="button primary" data-action="reload">Volver a intentar</button></div>';
     return;
   }
-  const pages = { inicio: dashboard, rutas: routesPage, horarios: schedulePage, avisos: noticesPage, gestion: adminPage };
+  const pages = { inicio: dashboard, rutas: routesPage, horarios: schedulePage, avisos: noticesPage, gestion: adminPage, 'mi-viaje': passengerPage, chofer: driverPage };
   pages[state.page]();
 }
 
 function adminPage() {
-  const sections = [['rutas', 'Rutas', 'route'], ['usuarios', 'Usuarios', 'users'], ['avisos', 'Avisos', 'bell'], ['viajes', 'Viajes', 'clock']];
+  const sections = [['rutas', 'Rutas', 'route'], ['usuarios', 'Usuarios', 'users'], ['avisos', 'Avisos', 'bell'], ['viajes', 'Viajes', 'clock'], ['unidades','Unidades','bus'], ['pasajeros','Abordajes','users']];
   const buttons = {
     rutas: ['new-route', 'Nueva ruta'], usuarios: ['new-user', 'Nuevo usuario'], avisos: ['new-notice', 'Publicar aviso'],
   };
@@ -343,13 +365,20 @@ function adminPage() {
         + '</td><td><span class="status-tag ' + (user.active ? 'published' : '') + '">' + (user.active ? 'Activo' : 'Inactivo')
         + '</span></td><td><button class="text-button" data-action="edit-user" data-id="' + user.id + '">' + icon('edit', 16) + 'Editar</button></td></tr>').join('') + '</tbody></table></div>',
     avisos: () => '<div class="notice-list">' + (state.admin.notices.map((notice) => noticeCard(notice, true)).join('') || empty('bell', 'Todavía no hay avisos.')) + '</div>',
+    unidades: () => state.admin.vehicles?.length ? '<div class="table-wrap card"><table><thead><tr><th>Unidad</th><th>Placas</th><th>Modelo</th><th>Chofer</th><th>Ruta</th><th>Capacidad</th></tr></thead><tbody>'
+      + state.admin.vehicles.map(v=>'<tr><td><b>'+escape(v.name)+'</b></td><td>'+escape(v.plate)+'</td><td>'+escape(v.model||'—')+'</td><td>'+escape(v.driver)+'</td><td>'+escape(v.routeCode?(v.routeCode+' · '+v.route):'Sin asignar')+'</td><td>'+v.capacity+'</td></tr>').join('')+'</tbody></table></div>'
+      : empty('bus','Aún no hay unidades registradas.'),
+    pasajeros: () => state.admin.passengers?.length ? '<div class="table-wrap card"><table><thead><tr><th>Fecha</th><th>Pasajero</th><th>Tipo</th><th>Ruta</th><th>Unidad / chofer</th><th>Parada</th><th>Ingreso</th><th>Salida</th></tr></thead><tbody>'
+      + state.admin.passengers.map(p=>'<tr><td>'+escape(p.date)+'</td><td><b>'+escape(p.passenger)+'</b></td><td>'+escape(roleNames[p.role])+'</td><td>'+escape(p.routeCode+' · '+p.route)+'</td><td>'+escape([p.vehicle,p.plate,p.driver].filter(Boolean).join(' · ')||'Pendiente')+'</td><td>'+escape(p.stop)+'</td><td>'+escape(p.boardedAt?clock.format(new Date(p.boardedAt)):'Sin abordar')+'</td><td>'+escape(p.alightedAt?clock.format(new Date(p.alightedAt)):'A bordo')+'</td></tr>').join('')+'</tbody></table></div>'
+      : empty('users','No hay reservaciones para la fecha de hoy.'),
     viajes: () => state.admin.trips.length ? '<div class="table-wrap card"><table><thead><tr><th scope="col">Fecha</th><th scope="col">Ruta</th><th scope="col">Salida prevista / real</th><th scope="col">Llegada prevista / real</th></tr></thead><tbody>'
       + state.admin.trips.map((trip) => '<tr><td>' + escape(trip.date) + '</td><td><b>' + escape(trip.code + ' · ' + trip.name) + '</b></td><td>' + trip.plannedDeparture + ' / ' + clock.format(new Date(trip.departedAt))
         + '</td><td>' + (trip.plannedArrival || '—') + ' / ' + (trip.arrivedAt ? clock.format(new Date(trip.arrivedAt)) : '—') + '</td></tr>').join('') + '</tbody></table></div>'
         : empty('clock', 'Todavía no se han registrado viajes.'),
   };
-  main.innerHTML = heading('Administración', 'Gestiona rutas, usuarios, avisos y registros de operación.', headerAction)
-    + (state.admin ? sectionsHtml + tables[state.adminTab]() : empty('alert', 'No se pudo cargar la administración.'));
+  const liveLocations=state.admin?.locations?.length?'<section class="card live-locations"><h2>Choferes en vivo</h2><div class="table-wrap"><table><thead><tr><th>Chofer</th><th>Ruta</th><th>Ubicación</th><th>Actualización</th></tr></thead><tbody>'+state.admin.locations.map(l=>'<tr><td>'+escape(l.driver)+'</td><td>'+escape(l.routeCode+' · '+l.route)+'</td><td><a href="https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(l.lat+','+l.lng)+'" target="_blank" rel="noopener">Ver en Google Maps</a></td><td>'+escape(clock.format(new Date(l.updatedAt)))+'</td></tr>').join('')+'</tbody></table></div></section>':'';
+  main.innerHTML = heading('Administración', 'Gestiona rutas, personas, unidades, abordajes y operación en vivo.', headerAction)
+    + (state.admin ? sectionsHtml + (state.adminTab==='pasajeros'?liveLocations:'') + tables[state.adminTab]() : empty('alert', 'No se pudo cargar la administración.'));
 }
 
 function openDialog(title, subtitle, content, { wide = false } = {}) {
@@ -384,13 +413,17 @@ function accountDialog() {
     return;
   }
   const accounts = state.config.demoAccounts ?? [];
+  if(state.registerMode){
+    openDialog('Crear cuenta','Regístrate como alumno o maestro.', '<form data-form="register">'+input('Nombre completo','name','',{required:true,max:120})+input('Correo electrónico','email','',{type:'email',required:true,max:180,autocomplete:'email'})+field('Tipo de cuenta','role','<select data-field required>'+option('student','Alumno')+option('teacher','Maestro')+'</select>')+input('Contraseña (mínimo 12 caracteres)','password','',{type:'password',required:true,max:160,autocomplete:'new-password'})+submitButtons('Crear cuenta')+'</form><button class="text-button" data-action="show-login">Ya tengo cuenta · Iniciar sesión</button>');
+    return;
+  }
   openDialog('Iniciar sesión', 'Accede con tu cuenta de Transporte UPTex.',
     '<form data-form="login">' + (accounts.length ? '<div class="demo-login"><strong>Cuentas de demostración</strong><div>'
       + accounts.map((account) => '<button type="button" class="button small secondary" data-action="demo-fill" data-email="' + escape(account.email)
         + '">' + roleNames[account.role] + '</button>').join('') + '</div></div>' : '')
     + input('Correo electrónico', 'email', '', { type: 'email', required: true, max: 180, autocomplete: 'username' })
     + input('Contraseña', 'password', '', { type: 'password', required: true, max: 160, autocomplete: 'current-password' })
-    + submitButtons('Entrar') + '</form>');
+    + submitButtons('Entrar') + '</form><button class="text-button" data-action="show-register">Crear cuenta de alumno o maestro</button>');
 }
 
 function stopEditor(stop = {}) {
@@ -470,6 +503,40 @@ async function confirmTrip(action) {
     + submitButtons(arrival ? 'Guardar llegada' : 'Guardar salida') + '</form>');
 }
 
+async function startQrCamera() {
+  const video=document.querySelector('#qr-camera');
+  if(!video)return;
+  if(!('BarcodeDetector' in window)&&!window.jsQR){showFlash('No se cargó el lector QR. Usa el campo manual o revisa tu conexión.',true);return;}
+  if(!navigator.mediaDevices?.getUserMedia){showFlash('Este navegador no permite cámara. Usa el campo manual.',true);return;}
+  try{
+    const detector='BarcodeDetector' in window?new BarcodeDetector({formats:['qr_code']}):null;
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+    state.cameraStream=stream;video.srcObject=stream;video.hidden=false;await video.play();
+    const scan=async()=>{if(!video.isConnected||video.hidden){stopQrCamera();return;}try{let value;if(detector){const codes=await detector.detect(video);value=codes[0]?.rawValue;}else if(video.videoWidth){const canvas=document.querySelector('#qr-frame'),context=canvas.getContext('2d',{willReadFrequently:true});canvas.width=video.videoWidth;canvas.height=video.videoHeight;context.drawImage(video,0,0,canvas.width,canvas.height);value=window.jsQR(context.getImageData(0,0,canvas.width,canvas.height).data,canvas.width,canvas.height,{inversionAttempts:'dontInvert'})?.data;}if(value){stopQrCamera();await submitScan(value);return;}}catch{}setTimeout(scan,450);};
+    void scan();
+  }catch{showFlash('No se pudo abrir la cámara. Revisa el permiso del navegador.',true);}
+}
+
+function stopQrCamera(){
+  state.cameraStream?.getTracks().forEach(track=>track.stop());state.cameraStream=null;
+  const video=document.querySelector('#qr-camera');if(video){video.srcObject=null;video.hidden=true;}
+}
+
+async function submitScan(qrToken, action=state.scanAction) {
+  const result=await api('driver/scan',{method:'POST',body:{qrToken,action}});
+  await refresh();render();
+  showFlash(action==='board'?'Abordaje registrado a las '+clock.format(new Date(result.at))+'.':'Bajada registrada a las '+clock.format(new Date(result.at))+'.');
+}
+
+function toggleDriverLocation(button) {
+  if(state.locationWatchId!==null){navigator.geolocation.clearWatch(state.locationWatchId);state.locationWatchId=null;button.textContent='Compartir ubicación en vivo';showFlash('Se detuvo el envío de ubicación.');return;}
+  if(!navigator.geolocation){showFlash('Este dispositivo no ofrece ubicación.',true);return;}
+  if(!state.driverData?.assignments?.length){showFlash('Coordinación debe asignarte una ruta activa primero.',true);return;}
+  button.disabled=true;
+  state.locationWatchId=navigator.geolocation.watchPosition(async position=>{try{await api('driver/location',{method:'POST',body:{lat:position.coords.latitude,lng:position.coords.longitude}});const status=document.querySelector('#location-status');if(status)status.textContent='Ubicación compartida: '+clock.format(new Date())+' · transmisión activa.';}catch(error){showFlash(error.message,true);}},error=>{state.locationWatchId=null;button.disabled=false;showFlash('No se pudo obtener la ubicación. Revisa el permiso del navegador.',true);},{enableHighAccuracy:true,maximumAge:10000,timeout:15000});
+  button.disabled=false;button.textContent='Detener ubicación en vivo';showFlash('Ubicación en vivo activada mientras esta pantalla permanezca abierta.');
+}
+
 document.addEventListener('submit', async (event) => {
   const form = event.target.closest('form[data-form]');
   if (!form) return;
@@ -482,6 +549,7 @@ document.addEventListener('submit', async (event) => {
   const id = form.dataset.id;
   const method = id ? 'PUT' : 'POST';
   let message;
+  const showLoginAfterRegister=form.dataset.form==='register';
   try {
     switch (form.dataset.form) {
       case 'login': {
@@ -490,6 +558,14 @@ document.addEventListener('submit', async (event) => {
         message = 'Sesión iniciada.';
         break;
       }
+      case 'register':
+        await api('register',{method:'POST',body:data});message='Cuenta creada. Inicia sesión.';state.registerMode=false;break;
+      case 'reservation':
+        await api('my/ride',{method:'POST',body:{routeId:Number(data.routeId),stopId:Number(data.stopId)}});message='Ruta y parada reservadas.';break;
+      case 'vehicle':
+        await api('driver/vehicle',{method:'POST',body:data});message='Unidad registrada.';break;
+      case 'scan':
+        await submitScan(data.qrToken,form.dataset.scanAction);return;
       case 'route': {
         const stops = [...form.querySelectorAll('.edit-stop')].map((node) => {
           const get = (name) => node.querySelector('[name="' + name + '"]').value;
@@ -514,6 +590,7 @@ document.addEventListener('submit', async (event) => {
         break;
     }
     dialog.close();
+    if(showLoginAfterRegister)accountDialog();
     await refresh();
     render();
     showFlash(message);
@@ -540,6 +617,8 @@ document.addEventListener('click', async (event) => {
   try {
     switch (action) {
       case 'account': accountDialog(); break;
+      case 'show-register': state.registerMode=true;accountDialog();break;
+      case 'show-login': state.registerMode=false;accountDialog();break;
       case 'close': dialog.close(); break;
       case 'install': await installDialog(); break;
       case 'demo-fill': {
@@ -550,6 +629,7 @@ document.addEventListener('click', async (event) => {
         break;
       }
       case 'logout':
+        if(state.locationWatchId!==null){navigator.geolocation.clearWatch(state.locationWatchId);state.locationWatchId=null;}
         await api('logout', { method: 'POST' });
         dialog.close();
         state.user = null;
@@ -572,6 +652,9 @@ document.addEventListener('click', async (event) => {
       case 'stop': updateStop(Number(button.dataset.index)); break;
       case 'map-refresh': await state.map?.refresh(); break;
       case 'trip': await confirmTrip(button.dataset.trip); break;
+      case 'scan-mode': state.scanAction=state.scanAction==='board'?'alight':'board';driverPage();break;
+      case 'scan-camera': await startQrCamera();break;
+      case 'location': toggleDriverLocation(button);break;
       case 'admin-tab':
         state.adminTab = tab;
         adminPage();
@@ -639,9 +722,14 @@ document.addEventListener('change', (event) => {
     noticesPage();
     document.querySelector('[data-filter="notice"]').focus({ preventScroll: true });
   }
+  if(target.matches('[data-passenger-route]')){
+    const route=(state.ride?.routes??state.routes).find(r=>String(r.id)===target.value);
+    target.form.elements.stopId.innerHTML=(route?.stops??[]).map(s=>option(s.id,s.name)).join('');
+  }
 });
 
 window.addEventListener('hashchange', () => {
+  stopQrCamera();
   render();
   window.scrollTo(0, 0);
   main.focus({ preventScroll: true });
@@ -672,6 +760,10 @@ async function refreshNotices() {
 }
 document.addEventListener('visibilitychange', () => { void refreshNotices(); });
 setInterval(refreshNotices, 60_000);
+setInterval(async()=>{
+  if(!state.user||document.hidden||dialog.open||!navigator.onLine)return;
+  try{await refresh();if(state.page==='gestion'||state.page==='chofer'||state.page==='mi-viaje')render();}catch{}
+},20000);
 
 async function boot() {
   main.setAttribute('aria-busy', 'true');

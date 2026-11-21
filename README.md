@@ -1,6 +1,6 @@
 # Transporte UPTex
 
-Aplicación para consultar y administrar las rutas universitarias hacia la Universidad Politécnica de Texcoco. Incluye un panel web y una app móvil instalable (PWA). Las dos usan la misma API REST y base de datos SQLite.
+Aplicación para consultar y administrar las rutas universitarias hacia la Universidad Politécnica de Texcoco. Incluye un panel web y una app móvil instalable (PWA). Las dos usan la misma API REST y base de datos SQLite. El nuevo logotipo institucional se usa también como ícono de la aplicación.
 
 ## Arranque local
 
@@ -18,10 +18,12 @@ node --env-file-if-exists=.env server.mjs
 
 | Cuenta | Flujo de demostración |
 | --- | --- |
-| Coordinación | Editar y publicar rutas, ordenar paradas, asignar choferes, administrar usuarios y administrar avisos. |
-| Chofer | Registrar salida y llegada de su ruta asignada. La cuenta de ejemplo tiene asignada R01. |
-| Alumno o profesor | Consultar itinerarios, horarios y tarifas, y marcar avisos como leídos. |
+| Coordinación | Editar y publicar rutas, ordenar paradas, asignar choferes, consultar unidades, ubicar choferes activos y revisar abordajes y bajadas. |
+| Chofer | Registrar su unidad, consultar la ruta asignada, compartir ubicación en vivo y escanear el QR al subir y al bajar pasajeros. |
+| Alumno o profesor | Crear cuenta e iniciar sesión, reservar ruta y parada, mostrar su QR personal y consultar unidad y horas de abordaje y bajada. |
 | Visitante | Consultar recorridos y avisos públicos. |
+
+El QR contiene un token aleatorio y no incluye el nombre ni el correo del pasajero. La reservación es diaria y coordinación debe asignar un chofer a la ruta. Para escanear con cámara y compartir ubicación, abre el sitio con HTTPS y permite el acceso desde el navegador. Si la cámara no está disponible, el chofer puede ingresar el token manualmente. El lector QR del navegador depende de `BarcodeDetector`; el ingreso manual queda disponible como alternativa.
 
 ## Configurar Google Maps
 
@@ -60,7 +62,7 @@ Este comando conserva los datos. Para cambiar el puerto anfitrión, define **UPT
 4. En **Settings → Networking → Public Networking**, genera un dominio con puerto de destino **3000**. Railway proporciona HTTPS. Abre **/api/health** en ese dominio y comprueba que responde **{"status":"ok"}**.
 5. Autoriza el dominio HTTPS en la clave de navegador de Google Maps y agrega **GOOGLE_MAPS_BROWSER_KEY** y **GOOGLE_MAPS_MAP_ID** a las variables de Railway. Después del despliegue, comprueba el trazado y entra a **Iniciar sesión** con la cuenta de coordinación.
 
-Desde el teléfono, abre el mismo dominio HTTPS para instalar la PWA. La primera ejecución crea un catálogo inicial. Confirma las coordenadas de las paradas antes de usarlo para el servicio.
+Desde el teléfono, abre el mismo dominio HTTPS para instalar la PWA. La primera ejecución crea un catálogo inicial. Confirma las coordenadas de las paradas antes de usarlo para el servicio. El chofer debe mantener abierta la pantalla del módulo para transmitir su ubicación; coordinación ve ubicaciones recibidas durante los últimos dos minutos.
 
 [Servicios y GitHub](https://docs.railway.com/services) · [Volúmenes y permisos](https://docs.railway.com/volumes) · [Dominio HTTPS](https://docs.railway.com/networking/public-networking)
 
