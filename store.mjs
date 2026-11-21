@@ -68,7 +68,7 @@ const schema = `
   CREATE TABLE IF NOT EXISTS stops (
     id INTEGER PRIMARY KEY, route_id INTEGER NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
     position INTEGER NOT NULL, name TEXT NOT NULL, lat REAL NOT NULL, lng REAL NOT NULL,
-    time TEXT, fare REAL, UNIQUE(route_id, position)
+    time TEXT, fare REAL, active INTEGER NOT NULL DEFAULT 1, UNIQUE(route_id, position)
   );
   CREATE TABLE IF NOT EXISTS notices (
     id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL,
@@ -96,6 +96,9 @@ export function openStore(path, { demo, adminEmail, adminPassword }) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec(schema);
+  if (!db.prepare('PRAGMA table_info(stops)').all().some(({ name }) => name === 'active')) {
+    db.exec('ALTER TABLE stops ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
+  }
   const missingProfiles = db.prepare("SELECT id FROM users WHERE role IN ('student','teacher') AND id NOT IN (SELECT user_id FROM passenger_profiles)").all();
   const createProfile = db.prepare('INSERT OR IGNORE INTO passenger_profiles(user_id,qr_token) VALUES(?,?)');
   for (const { id } of missingProfiles) createProfile.run(id, randomBytes(32).toString('hex'));
@@ -151,7 +154,7 @@ export function readRoutes(db, includeDrafts = false, user = null) {
     SELECT id, code, name, zone, color, status, departure, arrival, notes, driver_id AS driverId
     FROM routes WHERE status = 'active' OR ? = 1 ORDER BY code
   `).all(Number(includeDrafts));
-  const stops = db.prepare('SELECT id,name,lat,lng,time,fare FROM stops WHERE route_id = ? ORDER BY position');
+  const stops = db.prepare('SELECT id,name,lat,lng,time,fare FROM stops WHERE route_id = ? AND active = 1 ORDER BY position');
   const trips = db.prepare('SELECT id, driver_id AS tripDriverId, departed_at AS departedAt, arrived_at AS arrivedAt, planned_departure AS plannedDeparture, planned_arrival AS plannedArrival FROM trips WHERE date = ? AND route_id = ?');
   const today = localDate();
   return routes.map((route) => {
@@ -177,7 +180,8 @@ export function writeRoute(db, route, id = null) {
   } else {
     db.prepare('UPDATE routes SET code=?,name=?,zone=?,color=?,status=?,departure=?,arrival=?,notes=?,driver_id=? WHERE id=?')
       .run(...fields, id);
-    db.prepare('DELETE FROM stops WHERE route_id=?').run(id);
+    // Keep old stop rows as snapshots for reservations that reference them.
+    db.prepare('UPDATE stops SET active=0,position=-id WHERE route_id=?').run(id);
   }
   const insert = db.prepare('INSERT INTO stops(route_id,position,name,lat,lng,time,fare) VALUES(?,?,?,?,?,?,?)');
   stops.forEach((stop, index) => insert.run(id, index + 1, stop.name, stop.lat, stop.lng, stop.time, stop.fare));
