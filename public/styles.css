@@ -260,6 +260,8 @@ form[data-form] { display: grid; gap: 11px; }
 .form-error { background: #ffeded; color: #a52e3f; border-radius: 6px; padding: 7px 8px; font-size: .83rem; }
 .demo-login { background: #edf6eb; color: #294e31; border-radius: 8px; padding: 10px; font-size: .84rem; }
 .demo-login > div { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.login-help { margin-top: 11px; color: var(--muted); font-size: .83rem; }
+.login-help strong { color: var(--ink); }
 .account-content { display: flex; gap: 10px; align-items: center; }
 .account-content p { color: var(--muted); overflow-wrap: anywhere; }
 .install-guide { color: var(--muted); display: grid; gap: 11px; }

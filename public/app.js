@@ -423,7 +423,7 @@ function accountDialog() {
         + '">' + roleNames[account.role] + '</button>').join('') + '</div></div>' : '')
     + input('Correo electrónico', 'email', '', { type: 'email', required: true, max: 180, autocomplete: 'username' })
     + input('Contraseña', 'password', '', { type: 'password', required: true, max: 160, autocomplete: 'current-password' })
-    + submitButtons('Entrar') + '</form><button class="text-button" data-action="show-register">Crear cuenta de alumno o maestro</button>');
+    + submitButtons('Entrar') + '</form><p class="login-help"><strong>¿Eres chofer?</strong> Inicia sesión aquí con el correo y contraseña que te asignó coordinación. Si aún no tienes cuenta, coordinación puede crearla en Administración → Usuarios.</p><button class="text-button" data-action="show-register">Crear cuenta de alumno o maestro</button>');
 }
 
 function stopEditor(stop = {}) {
