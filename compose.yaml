@@ -1,0 +1,17 @@
+services:
+  transportes-uptex:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${UPTEX_PORT:-3000}:3000"
+    environment:
+      DEMO_MODE: "${DEMO_MODE:-0}"
+      SECURE_COOKIES: "${SECURE_COOKIES:-0}"
+      GOOGLE_MAPS_BROWSER_KEY: "${GOOGLE_MAPS_BROWSER_KEY:-}"
+      GOOGLE_MAPS_MAP_ID: "${GOOGLE_MAPS_MAP_ID:-}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
+    volumes:
+      - uptex-data:/app/data
+volumes:
+  uptex-data:
