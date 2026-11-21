@@ -101,14 +101,13 @@ function renderNav() {
       + icon(glyph, mobile ? 19 : 19) + '<span>' + name + '</span>'
       + (key === 'avisos' && unread && !mobile ? '<span class="nav-count">' + unread + '</span>' : '') + '</a>';
   };
-  sidebar.innerHTML = '<a class="brand" href="#inicio" aria-label="Transporte UPTex, inicio"><span class="brand-icon">' + icon('bus', 24)
-    + '</span><span><strong>Transporte UPTex</strong><small>Movilidad universitaria</small></span></a>'
+  sidebar.innerHTML = '<a class="brand" href="#inicio" aria-label="Transporte UPTex, inicio"><img class="brand-logo" src="/uptex-logo.png" alt="UPTex, transporte universitario"></a>'
     + '<div class="side-content"><span class="side-label">MENÚ PRINCIPAL</span><nav>' + links.map((link) => navLink(link)).join('') + '</nav></div>'
     + '<div class="side-bottom"><button class="side-help" data-action="install">' + icon('phone', 18) + '<span>App móvil</span>' + icon('chevron', 14) + '</button>'
-    + '<div class="campus-brand"><span class="campus-logo">' + icon('cap', 19) + '</span><span><strong>UPTex</strong><small>Universidad Politécnica de Texcoco</small></span></div></div>';
+    + '<div class="campus-brand"><img class="campus-full-logo" src="/uptex-logo.png" alt="UPTex, transporte universitario"></div></div>';
   mobileNav.innerHTML = links.map((link) => navLink(link, true)).join('');
   const label = links.find(([key]) => key === state.page)?.[1] ?? 'Panel general';
-  topbar.innerHTML = '<a class="mobile-brand" href="#inicio"><span class="brand-icon">' + icon('bus', 21) + '</span><strong>Transporte UPTex</strong></a>'
+  topbar.innerHTML = '<a class="mobile-brand" href="#inicio"><img class="brand-logo" src="/uptex-logo.png" alt="UPTex"></a>'
     + '<div class="breadcrumb"><span>Transporte</span>' + icon('chevron', 14) + '<strong>' + label + '</strong></div>'
     + '<div class="top-actions"><button class="icon-button mobile-install" data-action="install" aria-label="Instalar app móvil" title="App móvil">' + icon('phone', 19) + '</button>'
     + '<a class="icon-button notifications" href="#avisos" aria-label="Ver avisos" title="Avisos">' + icon('bell', 20) + (unread ? '<i></i>' : '') + '</a><span class="top-divider"></span>'
