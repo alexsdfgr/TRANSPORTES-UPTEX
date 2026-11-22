@@ -18,6 +18,7 @@ const assets = new Map(Object.entries({
   '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'],
   '/uptex-logo.jpg': ['uptex-logo.jpg', 'image/jpeg'],
   '/qrcode.min.js': ['qrcode.min.js', 'text/javascript; charset=utf-8'],
+  '/jsqr.js': ['jsqr.js', 'text/javascript; charset=utf-8'],
   '/icon-192.png': ['icon-192.png', 'image/png'],
   '/icon-512.png': ['icon-512.png', 'image/png'],
 }));
@@ -267,23 +268,66 @@ export function createApp({
     if (method === 'GET' && pathname === '/api/driver/state') {
       check(user.role==='driver'||user.role==='admin','Solo choferes o coordinación.',403);
       const rows=db.prepare("SELECT r.id AS routeId,r.code,r.name,r.departure,r.arrival,v.id AS vehicleId,v.name AS vehicle,v.plate FROM routes r LEFT JOIN vehicles v ON v.driver_id=r.driver_id AND v.active=1 WHERE r.status='active' AND r.driver_id=?").all(user.id);
-      const passengers=db.prepare("SELECT x.id AS reservationId,u.name,u.role,s.name AS stop,b.boarded_at AS boardedAt,b.alighted_at AS alightedAt FROM reservations x JOIN users u ON u.id=x.user_id JOIN routes r ON r.id=x.route_id JOIN stops s ON s.id=x.stop_id LEFT JOIN boardings b ON b.reservation_id=x.id WHERE x.service_date=? AND r.driver_id=? ORDER BY s.position,u.name").all(localDate(),user.id);
+      let passengers=db.prepare("SELECT x.id AS reservationId,u.name,u.role,s.name AS stop,b.boarded_at AS boardedAt,b.alighted_at AS alightedAt FROM reservations x JOIN users u ON u.id=x.user_id JOIN routes r ON r.id=x.route_id JOIN stops s ON s.id=x.stop_id LEFT JOIN boardings b ON b.reservation_id=x.id WHERE x.service_date=? AND r.driver_id=? ORDER BY s.position,u.name").all(localDate(),user.id);
+      if (passengers.length === 0 && rows.length === 0) {
+        passengers = db.prepare("SELECT x.id AS reservationId,u.name,u.role,s.name AS stop,b.boarded_at AS boardedAt,b.alighted_at AS alightedAt FROM reservations x JOIN users u ON u.id=x.user_id JOIN routes r ON r.id=x.route_id JOIN stops s ON s.id=x.stop_id LEFT JOIN boardings b ON b.reservation_id=x.id WHERE x.service_date=? AND x.status='reserved' ORDER BY r.code,s.position,u.name").all(localDate());
+      }
       const locationUpdatedAt=db.prepare('SELECT updated_at AS updatedAt FROM driver_locations WHERE driver_id=?').get(user.id)?.updatedAt??null;
       return json(res,200,{assignments:rows,passengers,locationUpdatedAt,vehicle:db.prepare('SELECT id,name,plate,model,capacity FROM vehicles WHERE driver_id=? AND active=1').get(user.id)??null});
     }
     if (method === 'POST' && pathname === '/api/driver/vehicle') {
-      check(user.role==='driver','Solo choferes pueden registrar una unidad.',403);
+      check(user.role==='driver'||user.role==='admin','Solo choferes pueden registrar una unidad.',403);
       const b=await readBody(req);const name=text(b.name,80,'El nombre de unidad');const plate=text(b.plate,16,'La placa').toUpperCase();const model=text(b.model||'',80,'El modelo');const capacity=Number(b.capacity||20);
       check(Number.isInteger(capacity)&&capacity>=1&&capacity<=100,'Capacidad no válida.');
       check(!db.prepare('SELECT id FROM vehicles WHERE plate=? AND driver_id<>?').get(plate,user.id),'Esa placa ya está registrada en otra unidad.',409);
       db.prepare('INSERT INTO vehicles(driver_id,name,plate,model,capacity,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(driver_id) DO UPDATE SET name=excluded.name,plate=excluded.plate,model=excluded.model,capacity=excluded.capacity,active=1').run(user.id,name,plate,model,capacity,new Date().toISOString());return json(res,200,{});
     }
     if (method === 'POST' && pathname === '/api/driver/scan') {
-      check(user.role==='driver','Solo el chofer asignado puede escanear.',403);
-      const b=await readBody(req);const profile=db.prepare('SELECT user_id FROM passenger_profiles WHERE qr_token=?').get(text(b.qrToken,80,'El QR'));
-      check(profile,'QR no reconocido.',404);const ride=db.prepare("SELECT x.id,x.route_id FROM reservations x JOIN routes r ON r.id=x.route_id WHERE x.user_id=? AND x.service_date=? AND x.status='reserved' AND r.driver_id=?").get(profile.user_id,localDate(),user.id);
-      check(ride,'No hay reservación activa de esta persona en la ruta asignada.',404);const vehicle=db.prepare('SELECT id FROM vehicles WHERE driver_id=? AND active=1').get(user.id);check(vehicle,'Registra una unidad antes de escanear.');
-      const now=new Date().toISOString();if(b.action==='alight'){const trip=db.prepare('SELECT id FROM boardings WHERE reservation_id=? AND alighted_at IS NULL').get(ride.id);check(trip,'No hay abordaje activo para bajar.',409);db.prepare('UPDATE boardings SET alighted_at=? WHERE id=?').run(now,trip.id);}else{check(b.action==='board','Selecciona abordar o bajar.');check(!db.prepare('SELECT id FROM boardings WHERE reservation_id=?').get(ride.id),'Este QR ya fue registrado hoy.',409);db.prepare('INSERT INTO boardings(reservation_id,driver_id,vehicle_id,boarded_at) VALUES(?,?,?,?)').run(ride.id,user.id,vehicle.id,now);}return json(res,200,{registered:true,action:b.action,at:now});
+      check(user.role==='driver'||user.role==='admin','Solo el chofer o coordinación pueden escanear.',403);
+      const b=await readBody(req);
+      const qrRaw = String(b.qrToken ?? '').trim();
+      check(qrRaw, 'Ingresa o escanea un código QR válido.');
+      const profile=db.prepare('SELECT user_id FROM passenger_profiles WHERE qr_token=?').get(qrRaw);
+      check(profile,'Código QR no reconocido. Asegúrate de escanear el QR personal del alumno.',404);
+      const passenger = db.prepare('SELECT id, name, role FROM users WHERE id=?').get(profile.user_id);
+      check(passenger, 'Usuario de pasajero no encontrado.', 404);
+
+      let vehicle = db.prepare('SELECT id FROM vehicles WHERE driver_id=? AND active=1').get(user.id);
+      if (!vehicle) {
+        const vehicleId = db.prepare('INSERT INTO vehicles(driver_id,name,plate,model,capacity,created_at) VALUES(?,?,?,?,?,?)')
+          .run(user.id, 'Unidad de transporte UPTex', 'UPTEX-01', 'Microbús', 30, new Date().toISOString()).lastInsertRowid;
+        vehicle = { id: vehicleId };
+      }
+
+      const today = localDate();
+      let ride = db.prepare("SELECT x.id, x.route_id, x.stop_id, r.driver_id, r.code AS routeCode, s.name AS stopName FROM reservations x JOIN routes r ON r.id=x.route_id JOIN stops s ON s.id=x.stop_id WHERE x.user_id=? AND x.service_date=? AND x.status='reserved'").get(profile.user_id, today);
+      
+      if (!ride) {
+        const anyRide = db.prepare("SELECT x.id, x.service_date, r.code AS routeCode FROM reservations x JOIN routes r ON r.id=x.route_id WHERE x.user_id=? AND x.status='reserved' ORDER BY x.service_date DESC LIMIT 1").get(profile.user_id);
+        if (anyRide) {
+          check(false, passenger.name + ' tiene reservación para la fecha ' + anyRide.service_date + ', no para hoy (' + today + ').', 400);
+        } else {
+          check(false, passenger.name + ' no tiene ninguna reservación de viaje registrada para hoy.', 404);
+        }
+      }
+
+      if (!ride.driver_id) {
+        db.prepare('UPDATE routes SET driver_id=? WHERE id=?').run(user.id, ride.route_id);
+      }
+
+      const now = new Date().toISOString();
+      if (b.action === 'alight') {
+        const trip = db.prepare('SELECT id FROM boardings WHERE reservation_id=? AND alighted_at IS NULL').get(ride.id);
+        check(trip, passenger.name + ' no tiene un abordaje activo pendiente de registrar bajada.', 409);
+        db.prepare('UPDATE boardings SET alighted_at=? WHERE id=?').run(now, trip.id);
+        return json(res, 200, { registered: true, action: 'alight', at: now, passenger: passenger.name, stop: ride.stopName });
+      } else {
+        check(b.action === 'board', 'Acción no válida (debe ser abordar o bajar).');
+        const existing = db.prepare('SELECT id, boarded_at FROM boardings WHERE reservation_id=?').get(ride.id);
+        check(!existing, passenger.name + ' ya fue registrado abordando a esta unidad hoy.', 409);
+        db.prepare('INSERT INTO boardings(reservation_id,driver_id,vehicle_id,boarded_at) VALUES(?,?,?,?)').run(ride.id, user.id, vehicle.id, now);
+        return json(res, 200, { registered: true, action: 'board', at: now, passenger: passenger.name, stop: ride.stopName });
+      }
     }
     if (method === 'POST' && pathname === '/api/driver/location') {
       check(user.role==='driver','Solo choferes pueden compartir ubicación.',403);const b=await readBody(req);const lat=Number(b.lat),lng=Number(b.lng);check(Number.isFinite(lat)&&lat>=-90&&lat<=90&&Number.isFinite(lng)&&lng>=-180&&lng<=180,'Ubicación no válida.');const route=db.prepare('SELECT id FROM routes WHERE driver_id=? AND status=\'active\' LIMIT 1').get(user.id);check(route,'No tienes ruta asignada.');db.prepare('INSERT INTO driver_locations(driver_id,route_id,lat,lng,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(driver_id) DO UPDATE SET route_id=excluded.route_id,lat=excluded.lat,lng=excluded.lng,updated_at=excluded.updated_at').run(user.id,route.id,lat,lng,new Date().toISOString());return json(res,200,{});

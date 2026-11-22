@@ -520,9 +520,33 @@ async function startQrCamera() {
     const detector='BarcodeDetector' in window?new BarcodeDetector({formats:['qr_code']}):null;
     const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
     state.cameraStream=stream;video.srcObject=stream;video.hidden=false;await video.play();
-    const scan=async()=>{if(!video.isConnected||video.hidden){stopQrCamera();return;}try{let value;if(detector){const codes=await detector.detect(video);value=codes[0]?.rawValue;}else if(video.videoWidth){const canvas=document.querySelector('#qr-frame'),context=canvas.getContext('2d',{willReadFrequently:true});canvas.width=video.videoWidth;canvas.height=video.videoHeight;context.drawImage(video,0,0,canvas.width,canvas.height);value=window.jsQR(context.getImageData(0,0,canvas.width,canvas.height).data,canvas.width,canvas.height,{inversionAttempts:'dontInvert'})?.data;}if(value){stopQrCamera();await submitScan(value);return;}}catch{}setTimeout(scan,450);};
+    let isScanning = true;
+    const scan=async()=>{
+      if(!isScanning||!video.isConnected||video.hidden){stopQrCamera();return;}
+      try{
+        let value;
+        if(detector){
+          const codes=await detector.detect(video);
+          value=codes[0]?.rawValue;
+        }else if(video.videoWidth&&window.jsQR){
+          const canvas=document.querySelector('#qr-frame')||document.createElement('canvas');
+          const context=canvas.getContext('2d',{willReadFrequently:true});
+          canvas.width=video.videoWidth;canvas.height=video.videoHeight;
+          context.drawImage(video,0,0,canvas.width,canvas.height);
+          value=window.jsQR(context.getImageData(0,0,canvas.width,canvas.height).data,canvas.width,canvas.height,{inversionAttempts:'dontInvert'})?.data;
+        }
+        if(value&&value.trim()){
+          isScanning = false;
+          stopQrCamera();
+          if(navigator.vibrate)navigator.vibrate([100,50,100]);
+          await submitScan(value.trim());
+          return;
+        }
+      }catch{}
+      if(isScanning)setTimeout(scan,300);
+    };
     void scan();
-  }catch{showFlash('No se pudo abrir la cámara. Revisa el permiso del navegador.',true);}
+  }catch{showFlash('No se pudo abrir la cámara. Revisa los permisos del navegador o usa el campo manual.',true);}
 }
 
 function stopQrCamera(){
@@ -531,9 +555,23 @@ function stopQrCamera(){
 }
 
 async function submitScan(qrToken, action=state.scanAction) {
-  const result=await api('driver/scan',{method:'POST',body:{qrToken,action}});
-  await refresh();render();
-  showFlash(action==='board'?'Abordaje registrado a las '+clock.format(new Date(result.at))+'.':'Bajada registrada a las '+clock.format(new Date(result.at))+'.');
+  const resultBox=document.querySelector('#scan-result');
+  try {
+    const result=await api('driver/scan',{method:'POST',body:{qrToken,action}});
+    await refresh();render();
+    const actionText=action==='board'?'Abordaje registrado':'Bajada registrada';
+    const detail=(result.passenger?': '+result.passenger:'')+(result.stop?' en '+result.stop:'');
+    showFlash(actionText+detail+' a las '+clock.format(new Date(result.at))+'.');
+    const newBox=document.querySelector('#scan-result');
+    if(newBox){
+      newBox.innerHTML='<p class="scan-success" style="background:rgba(220,243,223,0.85);color:#185324;border:1px solid #a5e2b0;border-radius:12px;padding:12px;font-weight:600;margin-top:10px;">✅ '+actionText+detail+' ('+clock.format(new Date(result.at))+')</p>';
+    }
+  }catch(error){
+    showFlash(error.message,true);
+    if(resultBox){
+      resultBox.innerHTML='<p class="form-error" role="alert" style="margin-top:10px;">❌ '+escape(error.message)+'</p>';
+    }
+  }
 }
 
 function toggleDriverLocation(button) {
