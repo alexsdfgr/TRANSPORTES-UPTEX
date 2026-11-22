@@ -108,8 +108,7 @@ function renderNav() {
   };
   sidebar.innerHTML = '<a class="brand" href="#inicio" aria-label="Transporte UPTex, inicio"><img class="brand-logo" src="/uptex-logo.jpg" alt="UPTex, transporte universitario"></a>'
     + '<div class="side-content"><span class="side-label">MENÚ PRINCIPAL</span><nav>' + links.map((link) => navLink(link)).join('') + '</nav></div>'
-    + '<div class="side-bottom"><button class="side-help" data-action="install">' + icon('phone', 18) + '<span>App móvil</span>' + icon('chevron', 14) + '</button>'
-    + '<div class="campus-brand"><img class="campus-full-logo" src="/uptex-logo.jpg" alt="UPTex, transporte universitario"></div></div>';
+    + '<div class="side-bottom"><button class="side-help" data-action="install">' + icon('phone', 18) + '<span>App móvil</span>' + icon('chevron', 14) + '</button></div>';
   mobileNav.innerHTML = links.map((link) => navLink(link, true)).join('');
   const label = links.find(([key]) => key === state.page)?.[1] ?? 'Panel general';
   topbar.innerHTML = '<a class="mobile-brand" href="#inicio"><img class="brand-logo" src="/uptex-logo.jpg" alt="UPTex"></a>'
