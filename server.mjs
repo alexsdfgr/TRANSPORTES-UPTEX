@@ -17,6 +17,7 @@ const assets = new Map(Object.entries({
   '/sw.js': ['sw.js', 'text/javascript; charset=utf-8'],
   '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'],
   '/uptex-logo.jpg': ['uptex-logo.jpg', 'image/jpeg'],
+  '/qrcode.min.js': ['qrcode.min.js', 'text/javascript; charset=utf-8'],
   '/icon-192.png': ['icon-192.png', 'image/png'],
   '/icon-512.png': ['icon-512.png', 'image/png'],
 }));

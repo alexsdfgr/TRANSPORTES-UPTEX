@@ -316,7 +316,16 @@ function passengerPage() {
   const form='<form data-form="reservation"><label class="field">Ruta<select name="routeId" data-passenger-route required>'+routes.map(r=>option(r.id,r.code+' · '+r.name,routeId)).join('')+'</select></label><label class="field">Parada para abordar<select name="stopId" required>'+((routes.find(r=>String(r.id)===String(routeId))??routes[0])?.stops??[]).map(s=>option(s.id,s.name,reservation?.stopId)).join('')+'</select></label>'+submitButtons(reservation?'Actualizar viaje':'Reservar viaje')+'</form>';
   const details=reservation?'<dl class="ride-details"><div><dt>Ruta</dt><dd>'+escape(reservation.code+' · '+reservation.route)+'</dd></div><div><dt>Parada</dt><dd>'+escape(reservation.stop)+'</dd></div><div><dt>Unidad</dt><dd>'+escape(reservation.vehicle?(reservation.vehicle+' · '+reservation.plate):'Se confirma al abordar')+'</dd></div><div><dt>Chofer</dt><dd>'+escape(reservation.driver??'Pendiente de asignar')+'</dd></div><div><dt>Ingreso</dt><dd>'+escape(reservation.boardedAt?clock.format(new Date(reservation.boardedAt)):'Pendiente')+'</dd></div><div><dt>Salida</dt><dd>'+escape(reservation.alightedAt?clock.format(new Date(reservation.alightedAt)):'Pendiente')+'</dd></div></dl>':'<p>Aún no tienes una reservación para hoy.</p>';
   main.innerHTML=heading('Mi viaje','Selecciona tu ruta y la parada donde esperarás la unidad.')+'<section class="card passenger-card"><h2>Mi QR personal</h2><p>El QR usa un identificador privado. El chofer lo escanea al subir y al bajar.</p>'+qr+'<code class="qr-token">'+escape(state.ride?.qrToken??'')+'</code>'+details+'</section><section class="card passenger-card"><h2>Reservar ruta y parada</h2>'+form+'</section>';
-  if(state.ride?.qrToken&&window.QRCode)QRCode.toCanvas(document.querySelector('#passenger-qr'),state.ride.qrToken,{width:220,margin:2}).catch(()=>{});
+  function drawQR(retries = 20) {
+    const canvas = document.querySelector('#passenger-qr');
+    if (!canvas || !state.ride?.qrToken) return;
+    if (window.QRCode?.toCanvas) {
+      QRCode.toCanvas(canvas, state.ride.qrToken, { width: 220, margin: 2, color: { dark: '#0a2215', light: '#ffffff' } }).catch(() => {});
+    } else if (retries > 0) {
+      setTimeout(() => drawQR(retries - 1), 100);
+    }
+  }
+  drawQR();
 }
 
 function driverPage() {
