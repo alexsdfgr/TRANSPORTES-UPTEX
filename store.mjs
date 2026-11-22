@@ -1,5 +1,5 @@
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { chmodSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { initialRoutes } from './seed.mjs';
@@ -90,15 +90,63 @@ const schema = `
     expires INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS sessions_by_user ON sessions(user_id);
+  CREATE INDEX IF NOT EXISTS boardings_by_vehicle ON boardings(vehicle_id, alighted_at);
+  CREATE INDEX IF NOT EXISTS boardings_by_reservation ON boardings(reservation_id);
+  CREATE INDEX IF NOT EXISTS reservations_by_route ON reservations(route_id, service_date, stop_id);
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    subscription TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS push_subscriptions_by_user ON push_subscriptions(user_id);
+  CREATE TABLE IF NOT EXISTS proximity_notices (
+    endpoint TEXT NOT NULL REFERENCES push_subscriptions(endpoint) ON DELETE CASCADE,
+    reservation_id INTEGER NOT NULL REFERENCES reservations(id) ON DELETE CASCADE,
+    PRIMARY KEY(endpoint, reservation_id)
+  );
 `;
+
+function backupBeforeMigration(db, path) {
+  const users = db.prepare('PRAGMA table_info(users)').all();
+  if (!users.length || users.some(({ name }) => name === 'matricula')) return;
+  const directory = mkdtempSync(join(dirname(path), '.uptex-previo-'));
+  chmodSync(directory, 0o700);
+  const snapshot = join(directory, basename(path));
+  db.prepare('VACUUM INTO ?').run(snapshot);
+  chmodSync(snapshot, 0o600);
+  const copy = new DatabaseSync(snapshot, { readOnly: true });
+  try {
+    if (copy.prepare('PRAGMA quick_check').get().quick_check !== 'ok') {
+      throw new Error('No se pudo verificar el respaldo previo a la migración de SQLite.');
+    }
+  } finally {
+    copy.close();
+  }
+  console.info('Respaldo de SQLite verificado antes de migrar: ' + snapshot);
+}
 
 export function openStore(path, { demo, adminEmail, adminPassword }) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
+  if (path !== ':memory:') backupBeforeMigration(db, path);
   db.exec(schema);
-  if (!db.prepare('PRAGMA table_info(stops)').all().some(({ name }) => name === 'active')) {
-    db.exec('ALTER TABLE stops ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
-  }
+  transaction(db, () => {
+    const additions = {
+      stops: { active: 'INTEGER NOT NULL DEFAULT 1' },
+      users: { matricula: 'TEXT' },
+      trips: { vehicle_id: 'INTEGER REFERENCES vehicles(id)' },
+      boardings: { board_stop_id: 'INTEGER REFERENCES stops(id)', alight_stop_id: 'INTEGER REFERENCES stops(id)', plate_at_boarding: 'TEXT' },
+      driver_locations: { trip_id: 'INTEGER REFERENCES trips(id)', progress_m: 'REAL', speed_mps: 'REAL', measured_at: 'INTEGER', matched: 'INTEGER NOT NULL DEFAULT 0' },
+    };
+    for (const [table, columns] of Object.entries(additions)) {
+      const existing = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(({ name }) => name));
+      for (const [column, definition] of Object.entries(columns)) {
+        if (!existing.has(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+      }
+    }
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_by_matricula ON users(matricula)');
+    db.exec(`UPDATE boardings SET plate_at_boarding=(SELECT plate FROM vehicles WHERE id=vehicle_id)
+      WHERE plate_at_boarding IS NULL`);
+  });
   const missingProfiles = db.prepare("SELECT id FROM users WHERE role IN ('student','teacher') AND id NOT IN (SELECT user_id FROM passenger_profiles)").all();
   const createProfile = db.prepare('INSERT OR IGNORE INTO passenger_profiles(user_id,qr_token) VALUES(?,?)');
   for (const { id } of missingProfiles) createProfile.run(id, randomBytes(32).toString('hex'));

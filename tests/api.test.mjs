@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { test } from 'node:test';
+import webpush from 'web-push';
 import { createApp } from '../server.mjs';
 
 async function start(t, config = {}) {
@@ -115,5 +116,102 @@ test('Operación comienza con un administrador propio y cookies seguras', async 
   const login = await request('/api/login', { method: 'POST', body: { email: 'coord@example.com', password: 'coordinacion-segura-1' } });
   assert.match(login.headers.get('Set-Cookie'), /; Secure$/);
   assert.equal(login.data.user.role, 'admin');
+});
+
+test('Rastreo, aforo y manifiesto se actualizan con el turno y los escaneos reales', async (t) => {
+  const request = await start(t);
+  const admin = await signIn(request, 'admin');
+  const driver = await signIn(request, 'chofer');
+  const student = await signIn(request, 'alumno');
+  const teacher = await signIn(request, 'profesor');
+  const send = (path, body, cookie, method = 'POST') => request('/api/' + path, { method, body, cookie });
+  const get = async (path, cookie) => (await request('/api/' + path, { cookie })).data;
+  const route = (await get('catalog')).routes.find((item) => item.code === 'R01');
+  const { id: stopId, lat, lng } = route.stops[0];
+  const reserve = { routeId: route.id, stopId };
+  const account = (await get('session', student)).user;
+  assert.equal((await send('admin/users/' + account.id, { ...account, matricula: 'a-202601', active: true, password: '' }, admin, 'PUT')).status, 200);
+  assert.equal((await send('my/ride', reserve, student)).status, 200);
+  assert.equal((await send('my/ride', reserve, teacher)).status, 200);
+
+  const shift = (action) => send('driver/shift', { routeId: route.id, action }, driver);
+  assert.equal((await shift('departure')).status, 409);
+  assert.equal((await send('driver/vehicle', { name: 'Combi 01', plate: 'TEX-010', capacity: 1 }, driver)).status, 200);
+  const started = await shift('departure');
+  assert.equal(started.status, 200);
+  assert.equal(started.data.shift.nextStop.waiting, 2);
+  const { tripId } = started.data.shift;
+  const measuredAt = Date.now();
+  assert.equal((await send('driver/location', { lat, lng, tripId, measuredAt }, driver)).status, 200);
+  assert.equal((await send('driver/location', { lat: route.stops[2].lat, lng: route.stops[2].lng, tripId, measuredAt: measuredAt - 1 }, driver)).status, 200);
+  const { tracking } = await get('my/tracking', student);
+  assert.equal(tracking.etaMinutes, 0);
+  assert.equal(tracking.stopsAway, 1);
+  assert.equal(tracking.unit.location.lat, lat);
+  assert.equal(tracking.unit.manifest, undefined);
+  assert.equal((await request('/api/admin/radar', { cookie: student })).status, 403);
+  assert.equal((await request('/api/live')).status, 401);
+
+  const { qrToken } = await get('my/ride', student);
+  const { qrToken: teacherToken } = await get('my/ride', teacher);
+  const scan = (action, token, stop) => send('driver/scan', { qrToken: token, action, stopId: stop }, driver);
+  assert.equal((await scan('board', qrToken)).status, 200);
+  assert.equal((await scan('board', qrToken)).status, 409);
+  assert.equal((await scan('board', teacherToken)).status, 409);
+  assert.equal((await shift('arrival')).status, 409);
+  const [unit] = (await get('admin/radar', admin)).units;
+  assert.equal(unit.occupied, 1);
+  assert.equal(unit.manifest[0].matricula, 'A-202601');
+  assert.equal(unit.manifest[0].role, 'student');
+  assert.equal(unit.plate, 'TEX-010');
+  assert.equal((await get('driver/state', driver)).shift.nextStop.waiting, 1);
+
+  const terminal = route.stops.at(-1);
+  assert.equal((await scan('alight', qrToken, terminal.id)).status, 200);
+  assert.deepEqual((await get('admin/radar', admin)).units[0].manifest, []);
+  assert.equal((await get('my/history', teacher)).history.length, 0);
+  const [record] = (await get('my/history', student)).history;
+  assert.equal(record.stop, route.stops[0].name);
+  assert.equal(record.alightStop, terminal.name);
+  assert.ok(record.alightedAt >= record.boardedAt);
+  assert.equal((await get('admin/history?q=a-202601', admin)).history[0].id, record.id);
+  const report = await get('admin/ridership?date=' + record.date, admin);
+  assert.equal(report.total, 1);
+  assert.equal(report.groups[0].stop, route.stops[0].name);
+  assert.equal(report.groups[0].routeCode, route.code);
+  assert.equal((await shift('arrival')).status, 200);
+  assert.deepEqual((await get('admin/radar', admin)).units, []);
+  assert.equal((await send('driver/vehicle', { name: 'Combi 02', plate: 'TEX-020', capacity: 1 }, driver)).status, 200);
+  assert.equal((await get('my/history', student)).history[0].plate, 'TEX-010');
+});
+
+test('La proximidad genera un aviso por reservación y dispositivo elegibles', async (t) => {
+  const sendPush = t.mock.method(webpush, 'sendNotification', async () => {});
+  const request = await start(t, { pushSubject: 'https://example.com' });
+  const driver = await signIn(request, 'chofer');
+  const student = await signIn(request, 'alumno');
+  const send = (path, body, cookie) => request('/api/' + path, { method: 'POST', body, cookie });
+  const config = (await request('/api/config')).data;
+  assert.match(config.pushKey, /^[\w-]+$/);
+  const endpoint = 'https://fcm.googleapis.com/fcm/send/uptex-test';
+  const subscription = { endpoint, keys: { p256dh: config.pushKey, auth: Buffer.alloc(16).toString('base64url') } };
+  assert.equal((await send('my/push', { ...subscription, endpoint: 'https://example.com/push' }, student)).status, 400);
+  assert.equal((await send('my/push', subscription, student)).status, 200);
+  const route = (await request('/api/catalog')).data.routes[0];
+  assert.equal((await send('my/ride', { routeId: route.id, stopId: route.stops[2].id }, student)).status, 200);
+  assert.equal((await send('driver/vehicle', { name: 'Combi', plate: 'TEX-01' }, driver)).status, 200);
+  const shift = (await send('driver/shift', { routeId: route.id, action: 'departure' }, driver)).data.shift;
+  const locate = async (index) => {
+    const { lat, lng } = route.stops[index];
+    assert.equal((await send('driver/location', { lat, lng, tripId: shift.tripId }, driver)).status, 200);
+  };
+  await locate(0);
+  assert.equal(sendPush.mock.callCount(), 0);
+  await locate(1);
+  assert.equal(sendPush.mock.callCount(), 1);
+  assert.equal(sendPush.mock.calls[0].arguments[0].endpoint, endpoint);
+  assert.equal(JSON.parse(sendPush.mock.calls[0].arguments[1]).title, 'Tu combi se acerca');
+  await locate(2);
+  assert.equal(sendPush.mock.callCount(), 1);
 });
 

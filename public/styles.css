@@ -1160,21 +1160,43 @@ form[data-form] { display: grid; gap: 13px; }
   border: 1px solid var(--glass-border);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
 }
-.passenger-card, .driver-manifest, .live-locations { padding: 20px; margin-bottom: 16px; }
-.passenger-card > p { color: var(--muted); margin: 6px 0 14px; }
+.ops-stack { display: grid; gap: 16px; }
+.ops-card { padding: clamp(16px, 2.5vw, 24px); min-width: 0; }
+.ops-card > p, .ops-card-head p { color: var(--muted); margin-top: 5px; }
+.ops-card form { display: grid; gap: 12px; margin-top: 12px; }
+.ops-card form > .button { justify-self: start; }
+.ops-card-head, .tracking-summary, .alert-settings { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ops-card .empty { padding: 22px 10px; }
+
+.pass-card {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: clamp(16px, 3vw, 28px);
+  width: min(100%, 480px);
+  margin-inline: auto;
+  text-align: center;
+}
+.pass-title, .pass-reservation { display: flex; align-items: center; gap: 10px; text-align: left; }
+.pass-title p, .pass-reservation p { font-size: .86rem; color: var(--muted); }
+.pass-offline { display: flex; align-items: center; justify-content: center; gap: 5px; color: var(--muted); font-size: .84rem; font-weight: 650; }
+.pass-code { max-width: 100%; color: var(--muted); font-size: .82rem; }
+.pass-code summary, .unit-settings summary, .scanner summary { cursor: pointer; }
+#pass-reservation:empty { display: none; }
+#pass-reservation { border-top: 1px solid var(--border-subtle); padding-top: 12px; width: 100%; }
+#pass-reservation .button { width: 100%; }
+.pass-reservation { justify-content: center; }
 #passenger-qr {
   display: block;
-  width: min(220px, 70vw);
+  width: min(280px, 100%);
   height: auto;
-  margin: 14px auto;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
-  border: 2px solid white;
   background: #ffffff;
 }
 .qr-token {
   display: block;
-  margin: 10px auto 18px;
+  margin: 6px auto;
   max-width: 100%;
   overflow-wrap: anywhere;
   text-align: center;
@@ -1192,14 +1214,80 @@ form[data-form] { display: grid; gap: 13px; }
 }
 .ride-details dt { color: var(--muted); font-size: .78rem; font-weight: 500; }
 .ride-details dd { font-weight: 700; overflow-wrap: anywhere; margin-top: 2px; }
-.driver-manifest > p { color: var(--muted); margin-top: 8px; }
+.tracking-card { overflow: hidden; }
+.tracking-summary { justify-content: flex-start; padding: 14px 16px 4px; }
+.tracking-summary .status-tag { margin-left: auto; }
+.tracking-summary p, .tracking-meta { color: var(--muted); font-size: .83rem; }
+.tracking-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: space-between; padding: 4px 16px 12px; }
+.tracking-card .live-map { height: clamp(285px, 43vh, 430px); }
+.map-units { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.map-unit {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  color: #fff;
+  background: var(--route-color, var(--blue-dark));
+  box-shadow: 0 3px 9px #0d281e50;
+}
+.map-units .map-unit { position: absolute; transform: translate(-50%, -50%); }
+.map-units button.map-unit { pointer-events: auto; }
+.map-unit.selected { box-shadow: 0 0 0 3px var(--route-color, var(--blue-dark)), 0 4px 12px #0d281e61; z-index: 1; }
+
+.driver-overview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.driver-overview .card { height: 100%; }
+.occupancy p { font-size: 1.18rem; font-weight: 650; line-height: 1.2; }
+.occupancy strong { font-size: clamp(1.8rem, 6vw, 3rem); color: var(--ink); }
+.occupancy meter { display: block; width: 100%; height: 12px; margin: 4px 0; }
+.occupancy span, .next-stop p, .alert-settings p { color: var(--muted); font-size: .86rem; }
+.next-stop strong { display: block; margin: 8px 0 3px; overflow-wrap: anywhere; }
+.capacity-warning { background: #fff2c8; color: #694202; }
+.capacity-full { background: #ffe2de; color: #8a2420; }
+.capacity-warning meter { accent-color: #a86b09; }
+.capacity-full meter { accent-color: #a73730; }
+.operation-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.scan-modes { margin-bottom: 12px; }
+.scan-modes > .button, .scanner-toggle { min-height: 46px; }
+.scan-modes > .button.active { background: #d9f0dc; color: #12511c; border-color: #adddb4; }
+.scanner details, .unit-settings form { margin-top: 12px; }
+.unit-settings summary { font-weight: 650; }
 .location-status { margin-top: 8px; color: var(--muted); font-size: .82rem; }
+.camera-view { position: relative; display: grid; justify-items: center; }
+.camera-guide { display: none; position: absolute; inset: 50% auto auto 50%; width: min(42%, 150px); aspect-ratio: 1; transform: translate(-50%, -50%); border: 2px solid #e1ffe7; border-radius: 20px; pointer-events: none; }
+.camera-view:has(video:not([hidden])) .camera-guide { display: block; }
 #qr-camera {
   width: min(100%, 440px);
   max-height: 55dvh;
-  margin: 14px auto;
+  margin: 0 auto 12px;
   border-radius: var(--radius-lg);
   background: #0d1e16;
   border: 2px solid rgba(255, 255, 255, 0.3);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+.scan-success { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 12px; color: #185324; background: #dcf3df; border-radius: var(--radius-md); font-weight: 650; }
+
+.radar-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.radar-units { padding-top: 12px; }
+#radar-manifest .ride-details { margin-top: 14px; }
+.manifest-title { margin-top: 18px; }
+.history-search { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
+.history-search .form-error:not([hidden]) { grid-column: 1 / -1; }
+.history-trip { padding: 14px 0; border-bottom: 1px solid var(--border-subtle); }
+.history-trip .ride-details { margin-top: 10px; }
+.history-more { margin-top: 12px; }
+.ridership-total { margin: 12px 0 8px; font-weight: 650; }
+
+@media (max-width: 1100px) {
+  .radar-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .pass-card { width: 100%; }
+  .pass-card #passenger-qr { width: min(250px, 100%); }
+  .driver-overview .ops-card { padding: 13px; }
+  .operation-actions > .button, .scanner-toggle { flex: 1 1 auto; }
+  .scanner-toggle { width: 100%; }
+  .tracking-summary .status-tag { margin-left: 0; }
+  .radar-grid .live-map { height: 330px; }
 }

@@ -72,14 +72,19 @@ export function mapsLink(stop) {
 }
 
 export class RouteMap {
-  constructor(element, config, { onStop, onEstimate, onStatus }) {
+  constructor(element, config, { onStop, onEstimate, onStatus, onUnit, live = false }) {
     this.element = element;
     this.config = config;
     this.onStop = onStop;
     this.onEstimate = onEstimate;
     this.onStatus = onStatus;
+    this.onUnit = onUnit;
+    this.live = live;
     this.canvas = element.querySelector('canvas');
     this.layer = element.querySelector('.google-map');
+    this.unitLayer = element.querySelector('.map-units');
+    this.units = [];
+    this.unitPins = new Map();
     this.focused = 0;
     this.zoom = 1;
     this.offset = [0, 0];
@@ -132,6 +137,62 @@ export class RouteMap {
     this.trafficLayer?.setMap(null);
     this.polylines = [];
     this.markers = [];
+    this.unitPins.forEach((pin) => {
+      if (pin.marker) pin.marker.map = null;
+      pin.element.remove();
+    });
+    this.unitPins.clear();
+  }
+
+  setUnits(units, selectedId) {
+    this.units = units.filter((unit) => unit.location);
+    this.selectedUnit = selectedId;
+    this.draw();
+  }
+
+  placeUnits() {
+    if (!this.unitLayer || !this.project) return;
+    const onGoogle = !this.layer.hidden && this.liveMarker;
+    this.unitLayer.hidden = Boolean(onGoogle);
+    for (const [id, pin] of this.unitPins) {
+      if (this.units.some((unit) => unit.tripId === id) && Boolean(pin.marker) === Boolean(onGoogle)) continue;
+      if (pin.marker) pin.marker.map = null;
+      pin.element.remove();
+      this.unitPins.delete(id);
+    }
+    for (const { tripId, color, code, location, vehicle } of this.units) {
+      const { lat, lng } = location;
+      let pin = this.unitPins.get(tripId);
+      if (!pin) {
+        const element = document.createElement(this.onUnit && !onGoogle ? 'button' : 'span');
+        element.className = 'map-unit';
+        element.innerHTML = icon('bus', 18);
+        element.title = code + ' · ' + vehicle;
+        element.setAttribute('aria-label', element.title);
+        element.style.setProperty('--route-color', routeColors[color]);
+        if (onGoogle) {
+          const marker = new this.liveMarker({ map: this.map, position: { lat, lng }, title: element.title, gmpClickable: Boolean(this.onUnit) });
+          marker.append(element);
+          if (this.onUnit) marker.addEventListener('gmp-click', () => this.onUnit(tripId));
+          pin = { element, marker };
+        } else {
+          if (this.onUnit) element.addEventListener('click', () => this.onUnit(tripId));
+          this.unitLayer.append(element);
+          pin = { element };
+        }
+        this.unitPins.set(tripId, pin);
+      }
+      const selected = this.selectedUnit === tripId;
+      pin.element.classList.toggle('selected', selected);
+      if (pin.marker) {
+        pin.marker.position = { lat, lng };
+        pin.marker.zIndex = selected ? 120 : 80;
+      } else {
+        const [x, y] = this.project([lat, lng]);
+        pin.element.style.left = x + 'px';
+        pin.element.style.top = y + 'px';
+      }
+    }
   }
 
   show(routes, selected, index = 0) {
@@ -181,6 +242,7 @@ export class RouteMap {
     this.clearGoogle();
     this.layer.hidden = true;
     this.onEstimate(null);
+    if (this.live) return this.refreshLive(version, key);
     if (!key || !route || route.stops.length < 2) {
       this.onStatus(key ? 'reference' : 'demo');
       return;
@@ -247,6 +309,54 @@ export class RouteMap {
     }
   }
 
+  async refreshLive(version, key) {
+    const stops = this.routes.flatMap((route) => route.stops);
+    if (!key || !stops.length) {
+      this.onStatus('reference');
+      this.placeUnits();
+      return;
+    }
+    try {
+      this.google = await googleMaps(key);
+      const [{ Map, Polyline }, { AdvancedMarkerElement }, { LatLngBounds }] = await Promise.all([
+        this.google.importLibrary('maps'), this.google.importLibrary('marker'), this.google.importLibrary('core'),
+      ]);
+      if (version !== this.version) return;
+      this.layer.hidden = false;
+      this.map ??= new Map(this.layer, {
+        center: stops[0], zoom: 12, mapId: this.config.mapId || 'DEMO_MAP_ID',
+        disableDefaultUI: true, clickableIcons: false, gestureHandling: 'cooperative',
+      });
+      this.bounds = new LatLngBounds();
+      stops.forEach((stop) => this.bounds.extend(stop));
+      this.units.forEach((unit) => this.bounds.extend(unit.location));
+      this.map.fitBounds(this.bounds, 38);
+      this.polylines = this.routes.filter((route) => route.stops.length > 1).map((route) => new Polyline({
+        path: route.stops, map: this.map, strokeColor: routeColors[route.color], strokeOpacity: .55, strokeWeight: 4,
+      }));
+      const stop = this.route?.stops[this.focused];
+      if (stop) {
+        const pin = document.createElement('span');
+        pin.className = 'google-stop';
+        pin.style.setProperty('--route-color', routeColors[this.route.color]);
+        pin.textContent = String(this.focused + 1);
+        const marker = new AdvancedMarkerElement({ map: this.map, position: stop, title: stop.name });
+        marker.append(pin);
+        this.markers = [marker];
+      }
+      this.liveMarker = AdvancedMarkerElement;
+      this.placeUnits();
+      this.onStatus('google');
+    } catch (error) {
+      if (version !== this.version) return;
+      this.clearGoogle();
+      this.layer.hidden = true;
+      this.placeUnits();
+      this.onStatus('reference');
+      console.warn('Mapa de seguimiento UPTex:', error.message);
+    }
+  }
+
   draw() {
     if (!this.routes) return;
     const width = this.canvas.clientWidth;
@@ -260,6 +370,7 @@ export class RouteMap {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     const allStops = this.routes.flatMap((route) => route.stops);
+    if (this.live) allStops.push(...this.units.map((unit) => unit.location));
     const minLat = Math.min(19.397, ...allStops.map((stop) => stop.lat));
     const maxLat = Math.max(19.590, ...allStops.map((stop) => stop.lat));
     const minLng = Math.min(-98.955, ...allStops.map((stop) => stop.lng));
@@ -272,6 +383,7 @@ export class RouteMap {
       height * .49 + (center[0] - lat) * scaleY + this.offset[1],
     ];
     this.project = project;
+    this.placeUnits();
     const path = (points) => {
       ctx.beginPath();
       points.forEach((point, i) => {

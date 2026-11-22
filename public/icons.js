@@ -34,6 +34,8 @@ const paths = {
   search: '<circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/>',
   map: '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3Zm6-3v15m6-12v15"/>',
   lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+  qr: '<rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="3" width="6" height="6" rx="1"/><rect x="3" y="15" width="6" height="6" rx="1"/><path d="M15 15h3v3h3v3m-6 0v-3m6-3v-2m-9-10v2m-9 7h2m7 0h2"/>',
+  camera: '<path d="M4 8h4l2-3h4l2 3h4a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="3"/>',
 };
 
 export function icon(name, size = 20) {

@@ -4,9 +4,10 @@ Aplicación para consultar y administrar las rutas universitarias hacia la Unive
 
 ## Arranque local
 
-Requiere Node.js 24 o posterior. El proyecto no requiere instalar paquetes de npm.
+Requiere Node.js 24 o posterior. Instala las dependencias antes del primer arranque.
 
 ~~~powershell
+npm ci
 npm start
 ~~~
 
@@ -23,7 +24,7 @@ node --env-file-if-exists=.env server.mjs
 | Alumno o profesor | Crear cuenta e iniciar sesión, reservar ruta y parada, mostrar su QR personal y consultar unidad y horas de abordaje y bajada. |
 | Visitante | Consultar recorridos y avisos públicos. |
 
-El QR contiene un token aleatorio y no incluye el nombre ni el correo del pasajero. La reservación es diaria y coordinación debe asignar un chofer a la ruta. Para escanear con cámara y compartir ubicación, abre el sitio con HTTPS y permite el acceso desde el navegador. Si la cámara no está disponible, el chofer puede ingresar el token manualmente. El lector QR del navegador depende de `BarcodeDetector`; el ingreso manual queda disponible como alternativa.
+El QR contiene un token aleatorio. La reservación es diaria y coordinación asigna un chofer a la ruta. Para escanear con cámara y compartir ubicación, abre el sitio con HTTPS y concede los permisos del navegador. Para iniciar un turno, el chofer registra primero sus placas y el aforo de su unidad. El lector usa `BarcodeDetector` o la biblioteca local jsQR y ofrece captura manual.
 
 ## Configurar Google Maps
 
@@ -35,7 +36,9 @@ La clave configurada es de navegador y se envía al cliente. Mantenla restringid
 
 ## Instalar la app móvil
 
-Sirve el proyecto con HTTPS y abre la dirección en el teléfono. En Android, usa **Instalar aplicación** desde Chrome. En iPhone, en Safari, usa **Compartir → Añadir a pantalla de inicio**. Después de la primera consulta en línea, la app conserva el catálogo público para consultarlo sin conexión. El inicio de sesión, los cambios y el trazado de Google requieren conexión.
+Sirve el proyecto con HTTPS y abre la dirección en el teléfono. En Android, usa **Instalar aplicación** desde Chrome. En iPhone, en Safari, usa **Compartir → Añadir a pantalla de inicio**. Después del primer acceso en línea, la PWA conserva el pase del alumno en ese dispositivo y lo borra al cerrar sesión. Abordar, reservar, consultar el historial y refrescar el rastreo requieren conexión.
+
+Activa **Alerta de proximidad** desde **Rastreo**. El aviso se genera al quedar hasta cinco minutos estimados o dos paradas para el abordaje. En iPhone se habilita desde la PWA instalada. Railway provee el dominio público que usa el servidor para Web Push. En otros entornos HTTPS, configura `WEB_PUSH_SUBJECT` con una URL pública propia o un `mailto:` de contacto. Las claves de Web Push se generan una vez y se guardan en SQLite.
 
 ## Docker y operación
 
@@ -62,7 +65,9 @@ Este comando conserva los datos. Para cambiar el puerto anfitrión, define **UPT
 4. En **Settings → Networking → Public Networking**, genera un dominio con puerto de destino **3000**. Railway proporciona HTTPS. Abre **/api/health** en ese dominio y comprueba que responde **{"status":"ok"}**.
 5. Autoriza el dominio HTTPS en la clave de navegador de Google Maps y agrega **GOOGLE_MAPS_BROWSER_KEY** y **GOOGLE_MAPS_MAP_ID** a las variables de Railway. Después del despliegue, comprueba el trazado y entra a **Iniciar sesión** con la cuenta de coordinación.
 
-Desde el teléfono, abre el mismo dominio HTTPS para instalar la PWA. La primera ejecución crea un catálogo inicial. Confirma las coordenadas de las paradas antes de usarlo para el servicio. El chofer debe mantener abierta la pantalla del módulo para transmitir su ubicación; coordinación ve ubicaciones recibidas durante los últimos dos minutos.
+Desde el teléfono, abre el mismo dominio HTTPS para instalar la PWA. Confirma las coordenadas de las paradas antes de usar el servicio. El chofer debe mantener visible la app para transmitir su ubicación. El radar conserva el turno y el manifiesto cuando se pierde señal, y quita del mapa las posiciones con más de un minuto de antigüedad. El ETA es aproximado y usa GPS y las paradas publicadas.
+
+Al actualizar una instalación anterior a las vistas por rol, el primer arranque crea y comprueba una copia de SQLite dentro del volumen, en un directorio `.uptex-previo-*`. El servicio empieza a recibir tráfico después de esa comprobación y de aplicar la migración.
 
 [Servicios y GitHub](https://docs.railway.com/services) · [Volúmenes y permisos](https://docs.railway.com/volumes) · [Dominio HTTPS](https://docs.railway.com/networking/public-networking)
 

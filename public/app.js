@@ -1,5 +1,6 @@
 import { icon } from './icons.js';
 import { RouteMap, mapControls, mapsLink, routeColors } from './maps.js';
+import { createOperationPages } from './operations.js';
 
 const sidebar = document.querySelector('#sidebar');
 const topbar = document.querySelector('#topbar');
@@ -15,6 +16,9 @@ const navigation = [
   ['avisos', 'Avisos', 'bell'],
 ];
 const roleNames = { admin: 'Coordinación', driver: 'Chofer', student: 'Alumno', teacher: 'Profesor' };
+const passengerRoles = ['student', 'teacher'];
+const passKey = 'uptex.pass';
+const pendingLogoutKey = 'uptex.pending-logout';
 const noticeTypes = { general: ['General', 'info'], schedule: ['Horarios', 'clock'], traffic: ['Tráfico', 'traffic'] };
 const routeColorNames = { blue: 'Azul', teal: 'Verde', orange: 'Naranja', purple: 'Morado' };
 const currency = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 2, minimumFractionDigits: 0 });
@@ -25,10 +29,47 @@ const state = {
   user: null, config: {}, routes: [], notices: [], admin: null, ride: null, driverData: null, hasData: false, offline: false,
   selectedId: null, stop: 0, page: 'inicio', adminTab: 'rutas',
   map: null, estimate: null, showTraffic: false, noticeFilter: 'all', scheduleFilter: 'all',
-  registerMode: false, scanAction: 'board', locationWatchId: null,
+  registerMode: false, scanAction: 'board', locationWatchId: null, tracking: null, units: [],
 };
 let flashTimeout;
 let installPrompt;
+let screenLock;
+let screenRequest = false;
+const ops = createOperationPages({ main, state, escape, option, empty, input, heading, routeBadge, roleNames, api, showFlash });
+
+function getStored(key) {
+  try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
+}
+
+function storeLocal(key, value) {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    // The browser may disable storage.
+    return false;
+  }
+}
+
+function savePass(user, ride) {
+  if (user && ride?.qrToken) {
+    const { id, name, role } = user;
+    state.passSaved = storeLocal(passKey, { id, name, role, qrToken: ride.qrToken });
+  } else {
+    state.passSaved = false;
+    storeLocal(passKey, null);
+  }
+}
+
+function roleNavigation() {
+  if (passengerRoles.includes(state.user?.role)) return [
+    ['mi-viaje', 'Mi pase', 'qr'], ['rastreo', 'Rastreo', 'map'], ['historial', 'Historial', 'clock'], ['avisos', 'Avisos', 'bell'],
+  ];
+  if (state.user?.role === 'driver') return [['chofer', 'Operación', 'bus'], ['avisos', 'Avisos', 'bell']];
+  if (state.user?.role === 'admin') return [['control', 'Torre de Control', 'target'], ...navigation, ['gestion', 'Administración', 'shield']];
+  return navigation;
+}
 
 function escape(value) {
   return String(value ?? '').replace(/[&<>"']/g, (part) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[part]);
@@ -60,18 +101,25 @@ async function api(path, { method = 'GET', body } = {}) {
     body: method === 'GET' ? undefined : JSON.stringify(body ?? {}),
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'No se pudo completar la solicitud.');
+  if (!response.ok) throw Object.assign(new Error(data.error || 'No se pudo completar la solicitud.'), { status: response.status });
   if (response.headers.get('X-UPTEX-Offline') === '1') data.offline = true;
   return data;
 }
 
 async function refresh() {
-  const data = await api(state.user ? 'dashboard' : 'catalog');
+  const user = state.user;
+  const [data, admin, ride, driverData, trackingData, radar] = await Promise.all([
+    api(user ? 'dashboard' : 'catalog'),
+    user?.role === 'admin' ? api('admin/state') : null,
+    passengerRoles.includes(user?.role) ? api('my/ride') : null,
+    user?.role === 'driver' ? api('driver/state') : null,
+    passengerRoles.includes(user?.role) ? api('my/tracking') : null,
+    user?.role === 'admin' ? api('admin/radar') : null,
+  ]);
+  if (user !== state.user) return;
   Object.assign(state, data, { hasData: true, offline: Boolean(data.offline) });
-  if (state.user?.role === 'admin') state.admin = await api('admin/state');
-  else state.admin = null;
-  state.ride = ['student','teacher'].includes(state.user?.role) ? await api('my/ride') : null;
-  state.driverData = state.user?.role === 'driver' ? await api('driver/state') : null;
+  Object.assign(state, { admin, ride, driverData, tracking: trackingData?.tracking ?? null, units: radar?.units ?? [] });
+  savePass(user, ride);
   if (!state.routes.some((route) => route.id === state.selectedId)) {
     state.selectedId = state.routes[0]?.id ?? null;
     state.stop = 0;
@@ -95,23 +143,21 @@ function initials(label) {
 }
 
 function renderNav() {
-  const links = [...navigation];
-  if (state.user?.role === 'admin') links.push(['gestion', 'Administración', 'shield']);
-  if (['student','teacher'].includes(state.user?.role)) links.push(['mi-viaje','Mi viaje','route']);
-  if (state.user?.role === 'driver') links.push(['chofer','Módulo de chofer','bus']);
+  const links = roleNavigation();
+  const [home] = links[0];
   const unread = state.notices.filter((notice) => !notice.isRead).length;
   const navLink = ([key, label, glyph], mobile = false) => {
-    const name = mobile ? { inicio: 'Inicio', rutas: 'Rutas', horarios: 'Horarios', avisos: 'Avisos', gestion: 'Gestión', 'mi-viaje':'Mi viaje', chofer:'Chofer' }[key] : label;
+    const name = mobile ? ({ inicio: 'Inicio', rutas: 'Rutas', gestion: 'Gestión', control: 'Radar', 'mi-viaje': 'Pase' }[key] ?? label) : label;
     return '<a href="#' + key + '" class="nav-link' + (state.page === key ? ' current' : '') + '"' + (state.page === key ? ' aria-current="page"' : '') + '>'
       + icon(glyph, mobile ? 19 : 19) + '<span>' + name + '</span>'
       + (key === 'avisos' && unread && !mobile ? '<span class="nav-count">' + unread + '</span>' : '') + '</a>';
   };
-  sidebar.innerHTML = '<a class="brand" href="#inicio" aria-label="Transporte UPTex, inicio"><img class="brand-logo" src="/uptex-logo.jpg" alt="UPTex, transporte universitario"></a>'
+  sidebar.innerHTML = '<a class="brand" href="#' + home + '" aria-label="Transporte UPTex, inicio"><img class="brand-logo" src="/uptex-logo.jpg" alt="UPTex, transporte universitario"></a>'
     + '<div class="side-content"><span class="side-label">MENÚ PRINCIPAL</span><nav>' + links.map((link) => navLink(link)).join('') + '</nav></div>'
     + '<div class="side-bottom"><button class="side-help" data-action="install">' + icon('phone', 18) + '<span>App móvil</span>' + icon('chevron', 14) + '</button></div>';
   mobileNav.innerHTML = links.map((link) => navLink(link, true)).join('');
   const label = links.find(([key]) => key === state.page)?.[1] ?? 'Panel general';
-  topbar.innerHTML = '<a class="mobile-brand" href="#inicio"><img class="brand-logo" src="/uptex-logo.jpg" alt="UPTex"></a>'
+  topbar.innerHTML = '<a class="mobile-brand" href="#' + home + '"><img class="brand-logo" src="/uptex-logo.jpg" alt="UPTex"></a>'
     + '<div class="breadcrumb"><span>Transporte</span>' + icon('chevron', 14) + '<strong>' + label + '</strong></div>'
     + '<div class="top-actions"><button class="icon-button mobile-install" data-action="install" aria-label="Instalar app móvil" title="App móvil">' + icon('phone', 19) + '</button>'
     + '<a class="icon-button notifications" href="#avisos" aria-label="Ver avisos" title="Avisos">' + icon('bell', 20) + (unread ? '<i></i>' : '') + '</a><span class="top-divider"></span>'
@@ -309,52 +355,32 @@ function noticesPage() {
     + '<div class="notice-list">' + (notices.map((notice) => noticeCard(notice)).join('') || empty('bell', 'No hay avisos de este tipo.')) + '</div>';
 }
 
-function passengerPage() {
-  const routes=state.ride?.routes??state.routes;const reservation=state.ride?.reservation;
-  const qr='<canvas id="passenger-qr" width="220" height="220" aria-label="QR personal de abordaje"></canvas>';
-  const routeId=reservation?.routeId??state.selectedId??routes[0]?.id;
-  const form='<form data-form="reservation"><label class="field">Ruta<select name="routeId" data-passenger-route required>'+routes.map(r=>option(r.id,r.code+' · '+r.name,routeId)).join('')+'</select></label><label class="field">Parada para abordar<select name="stopId" required>'+((routes.find(r=>String(r.id)===String(routeId))??routes[0])?.stops??[]).map(s=>option(s.id,s.name,reservation?.stopId)).join('')+'</select></label>'+submitButtons(reservation?'Actualizar viaje':'Reservar viaje')+'</form>';
-  const details=reservation?'<dl class="ride-details"><div><dt>Ruta</dt><dd>'+escape(reservation.code+' · '+reservation.route)+'</dd></div><div><dt>Parada</dt><dd>'+escape(reservation.stop)+'</dd></div><div><dt>Unidad</dt><dd>'+escape(reservation.vehicle?(reservation.vehicle+' · '+reservation.plate):'Se confirma al abordar')+'</dd></div><div><dt>Chofer</dt><dd>'+escape(reservation.driver??'Pendiente de asignar')+'</dd></div><div><dt>Ingreso</dt><dd>'+escape(reservation.boardedAt?clock.format(new Date(reservation.boardedAt)):'Pendiente')+'</dd></div><div><dt>Salida</dt><dd>'+escape(reservation.alightedAt?clock.format(new Date(reservation.alightedAt)):'Pendiente')+'</dd></div></dl>':'<p>Aún no tienes una reservación para hoy.</p>';
-  main.innerHTML=heading('Mi viaje','Selecciona tu ruta y la parada donde esperarás la unidad.')+'<section class="card passenger-card"><h2>Mi QR personal</h2><p>El QR usa un identificador privado. El chofer lo escanea al subir y al bajar.</p>'+qr+'<code class="qr-token">'+escape(state.ride?.qrToken??'')+'</code>'+details+'</section><section class="card passenger-card"><h2>Reservar ruta y parada</h2>'+form+'</section>';
-  function drawQR(retries = 20) {
-    const canvas = document.querySelector('#passenger-qr');
-    if (!canvas || !state.ride?.qrToken) return;
-    if (window.QRCode?.toCanvas) {
-      QRCode.toCanvas(canvas, state.ride.qrToken, { width: 220, margin: 2, color: { dark: '#0a2215', light: '#ffffff' } }).catch(() => {});
-    } else if (retries > 0) {
-      setTimeout(() => drawQR(retries - 1), 100);
-    }
-  }
-  drawQR();
-}
-
-function driverPage() {
-  const d=state.driverData??{assignments:[],vehicle:null};const assignments=d.assignments??[];
-  const passengers=d.passengers??[];
-  const manifest='<section class="card driver-manifest"><h2>Pasajeros de hoy</h2>'+(passengers.length?'<div class="table-wrap"><table><thead><tr><th>Pasajero</th><th>Parada</th><th>Abordaje</th><th>Bajada</th></tr></thead><tbody>'+passengers.map(p=>'<tr><td>'+escape(p.name)+'</td><td>'+escape(p.stop)+'</td><td>'+escape(p.boardedAt?clock.format(new Date(p.boardedAt)):'Pendiente')+'</td><td>'+escape(p.alightedAt?clock.format(new Date(p.alightedAt)):'Pendiente')+'</td></tr>').join('')+'</tbody></table></div>':'<p>Aún no hay personas registradas en tu ruta de hoy.</p>')+'</section>';
-  main.innerHTML=heading('Módulo de chofer','Registra tu unidad; coordinación te asigna la ruta y aquí verás los abordajes.')+'<section class="card passenger-card"><h2>Unidad</h2><form data-form="vehicle">'+input('Nombre o número económico','name',d.vehicle?.name??'',{required:true,max:80})+input('Placas','plate',d.vehicle?.plate??'',{required:true,max:16})+input('Modelo','model',d.vehicle?.model??'',{max:80})+input('Capacidad','capacity',d.vehicle?.capacity??20,{type:'number',min:1,max:100})+submitButtons('Guardar unidad')+'</form></section><section class="card passenger-card"><h2>Ruta asignada</h2>'+ (assignments.map(r=>'<p><b>'+escape(r.code)+' · '+escape(r.name)+'</b> · '+escape(r.departure??'Horario por confirmar')+'</p>').join('')||'<p>Coordinación aún no te asigna ruta.</p>') +'<button class="button secondary" data-action="location">Compartir ubicación en vivo</button><p class="location-status" id="location-status" aria-live="polite">'+(d.locationUpdatedAt?'Ubicación actualizada: '+escape(clock.format(new Date(d.locationUpdatedAt))):'La ubicación solo se comparte mientras el chofer activa esta opción.')+'</p></section><section class="card passenger-card"><h2>Escanear QR</h2><p>Escanea para registrar subida o bajada. Si tu navegador no permite cámara, puedes pegar el identificador manualmente.</p><video id="qr-camera" playsinline hidden></video><canvas id="qr-frame" hidden></canvas><button class="button secondary" data-action="scan-camera">Abrir cámara</button><button class="button secondary" data-action="scan-mode">'+(state.scanAction==='board'?'Modo actual: abordar · cambiar a bajar':'Modo actual: bajar · cambiar a abordar')+'</button><form data-form="scan" data-scan-action="'+state.scanAction+'"><label class="field">Código QR<input name="qrToken" autocomplete="off" required></label><p class="form-error" role="alert" hidden></p><button class="button primary" type="submit">Registrar '+(state.scanAction==='board'?'abordaje':'bajada')+'</button></form><div id="scan-result" aria-live="polite"></div></section>'+manifest;
-}
 
 function render() {
+  if (state.cameraStream || cameraStarting) stopQrCamera();
   state.map?.destroy();
   state.map = null;
   const hash = location.hash.slice(1);
-  const permitted = [...navigation.map(([key]) => key), ...(state.user?.role === 'admin' ? ['gestion'] : []), ...(['student','teacher'].includes(state.user?.role)?['mi-viaje']:[]), ...(state.user?.role==='driver'?['chofer']:[])];
-  state.page = permitted.includes(hash) ? hash : 'inicio';
+  const permitted = roleNavigation().map(([key]) => key);
+  state.page = permitted.includes(hash) ? hash : permitted[0];
   renderNav();
   main.setAttribute('aria-busy', 'false');
   if (!state.hasData) {
     main.innerHTML = heading('Transporte UPTex', 'Consulta el servicio de transporte universitario.')
       + '<div class="card offline-card">' + empty('alert', 'No se pudo cargar la información del transporte.')
       + '<button class="button primary" data-action="reload">Volver a intentar</button></div>';
+    void synchronizeScreen();
     return;
   }
-  const pages = { inicio: dashboard, rutas: routesPage, horarios: schedulePage, avisos: noticesPage, gestion: adminPage, 'mi-viaje': passengerPage, chofer: driverPage };
+  const pages = { inicio: dashboard, rutas: routesPage, horarios: schedulePage, avisos: noticesPage, gestion: adminPage,
+    control: ops.radarPage, 'mi-viaje': ops.passengerPage, rastreo: ops.trackingPage, historial: ops.historyPage, chofer: ops.driverPage };
   pages[state.page]();
+  updateLocationStatus();
+  void synchronizeScreen();
 }
 
 function adminPage() {
-  const sections = [['rutas', 'Rutas', 'route'], ['usuarios', 'Usuarios', 'users'], ['avisos', 'Avisos', 'bell'], ['viajes', 'Viajes', 'clock'], ['unidades','Unidades','bus'], ['pasajeros','Abordajes','users']];
+  const sections = [['rutas', 'Rutas', 'route'], ['usuarios', 'Usuarios', 'users'], ['avisos', 'Avisos', 'bell'], ['viajes', 'Viajes', 'clock'], ['unidades','Unidades','bus'], ['pasajeros','Abordajes','users'], ['afluencia', 'Afluencia', 'calendar']];
   const buttons = {
     rutas: ['new-route', 'Nueva ruta'], usuarios: ['new-user', 'Nuevo usuario'], avisos: ['new-notice', 'Publicar aviso'],
   };
@@ -376,17 +402,17 @@ function adminPage() {
     unidades: () => state.admin.vehicles?.length ? '<div class="table-wrap card"><table><thead><tr><th>Unidad</th><th>Placas</th><th>Modelo</th><th>Chofer</th><th>Ruta</th><th>Capacidad</th></tr></thead><tbody>'
       + state.admin.vehicles.map(v=>'<tr><td><b>'+escape(v.name)+'</b></td><td>'+escape(v.plate)+'</td><td>'+escape(v.model||'—')+'</td><td>'+escape(v.driver)+'</td><td>'+escape(v.routeCode?(v.routeCode+' · '+v.route):'Sin asignar')+'</td><td>'+v.capacity+'</td></tr>').join('')+'</tbody></table></div>'
       : empty('bus','Aún no hay unidades registradas.'),
-    pasajeros: () => state.admin.passengers?.length ? '<div class="table-wrap card"><table><thead><tr><th>Fecha</th><th>Pasajero</th><th>Tipo</th><th>Ruta</th><th>Unidad / chofer</th><th>Parada</th><th>Ingreso</th><th>Salida</th></tr></thead><tbody>'
-      + state.admin.passengers.map(p=>'<tr><td>'+escape(p.date)+'</td><td><b>'+escape(p.passenger)+'</b></td><td>'+escape(roleNames[p.role])+'</td><td>'+escape(p.routeCode+' · '+p.route)+'</td><td>'+escape([p.vehicle,p.plate,p.driver].filter(Boolean).join(' · ')||'Pendiente')+'</td><td>'+escape(p.stop)+'</td><td>'+escape(p.boardedAt?clock.format(new Date(p.boardedAt)):'Sin abordar')+'</td><td>'+escape(p.alightedAt?clock.format(new Date(p.alightedAt)):'A bordo')+'</td></tr>').join('')+'</tbody></table></div>'
-      : empty('users','No hay reservaciones para la fecha de hoy.'),
+    pasajeros: ops.adminHistory,
+    afluencia: ops.ridershipPage,
     viajes: () => state.admin.trips.length ? '<div class="table-wrap card"><table><thead><tr><th scope="col">Fecha</th><th scope="col">Ruta</th><th scope="col">Salida prevista / real</th><th scope="col">Llegada prevista / real</th></tr></thead><tbody>'
       + state.admin.trips.map((trip) => '<tr><td>' + escape(trip.date) + '</td><td><b>' + escape(trip.code + ' · ' + trip.name) + '</b></td><td>' + trip.plannedDeparture + ' / ' + clock.format(new Date(trip.departedAt))
         + '</td><td>' + (trip.plannedArrival || '—') + ' / ' + (trip.arrivedAt ? clock.format(new Date(trip.arrivedAt)) : '—') + '</td></tr>').join('') + '</tbody></table></div>'
         : empty('clock', 'Todavía no se han registrado viajes.'),
   };
-  const liveLocations=state.admin?.locations?.length?'<section class="card live-locations"><h2>Choferes en vivo</h2><div class="table-wrap"><table><thead><tr><th>Chofer</th><th>Ruta</th><th>Ubicación</th><th>Actualización</th></tr></thead><tbody>'+state.admin.locations.map(l=>'<tr><td>'+escape(l.driver)+'</td><td>'+escape(l.routeCode+' · '+l.route)+'</td><td><a href="https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(l.lat+','+l.lng)+'" target="_blank" rel="noopener">Ver en Google Maps</a></td><td>'+escape(clock.format(new Date(l.updatedAt)))+'</td></tr>').join('')+'</tbody></table></div></section>':'';
   main.innerHTML = heading('Administración', 'Gestiona rutas, personas, unidades, abordajes y operación en vivo.', headerAction)
-    + (state.admin ? sectionsHtml + (state.adminTab==='pasajeros'?liveLocations:'') + tables[state.adminTab]() : empty('alert', 'No se pudo cargar la administración.'));
+    + (state.admin ? sectionsHtml + tables[state.adminTab]() : empty('alert', 'No se pudo cargar la administración.'));
+  if (state.adminTab === 'pasajeros') void ops.loadHistory();
+  if (state.adminTab === 'afluencia') void ops.loadRidership();
 }
 
 function openDialog(title, subtitle, content, { wide = false } = {}) {
@@ -416,13 +442,13 @@ function accountDialog() {
   if (state.user) {
     openDialog('Mi cuenta', roleNames[state.user.role],
       '<div class="account-content"><div class="avatar">' + escape(initials(state.user.name)) + '</div><div><strong>' + escape(state.user.name)
-      + '</strong><p>' + escape(state.user.email) + '</p></div></div><div class="form-actions"><button class="button secondary" data-action="logout">'
+      + '</strong><p>' + escape(state.user.matricula ? 'Matrícula ' + state.user.matricula : state.user.email) + '</p></div></div><div class="form-actions"><button class="button secondary" data-action="logout">'
       + icon('logout', 17) + 'Cerrar sesión</button></div>');
     return;
   }
   const accounts = state.config.demoAccounts ?? [];
   if(state.registerMode){
-    openDialog('Crear cuenta','Regístrate como alumno o maestro.', '<form data-form="register">'+input('Nombre completo','name','',{required:true,max:120})+input('Correo electrónico','email','',{type:'email',required:true,max:180,autocomplete:'email'})+field('Tipo de cuenta','role','<select data-field required>'+option('student','Alumno')+option('teacher','Maestro')+'</select>')+input('Contraseña (mínimo 12 caracteres)','password','',{type:'password',required:true,max:160,autocomplete:'new-password'})+submitButtons('Crear cuenta')+'</form><button class="text-button" data-action="show-login">Ya tengo cuenta · Iniciar sesión</button>');
+    openDialog('Crear cuenta','Regístrate como alumno o maestro.', '<form data-form="register">'+input('Nombre completo','name','',{required:true,max:120})+input('Correo electrónico','email','',{type:'email',required:true,max:180,autocomplete:'email'})+field('Tipo de cuenta','role','<select data-field required>'+option('student','Alumno')+option('teacher','Maestro')+'</select>')+input('Matrícula o número institucional','matricula','',{required:true,max:30})+input('Contraseña (mínimo 12 caracteres)','password','',{type:'password',required:true,max:160,autocomplete:'new-password'})+submitButtons('Crear cuenta')+'</form><button class="text-button" data-action="show-login">Ya tengo cuenta · Iniciar sesión</button>');
     return;
   }
   openDialog('Iniciar sesión', 'Accede con tu cuenta de Transporte UPTex.',
@@ -477,6 +503,7 @@ function userDialog(user = { name: '', email: '', role: 'student', active: true 
     '<form data-form="user" data-id="' + (user.id ?? '') + '">'
     + input('Nombre', 'name', user.name, { required: true, max: 120 })
     + input('Correo electrónico', 'email', user.email, { type: 'email', required: true, max: 180 })
+    + input('Matrícula o número institucional', 'matricula', user.matricula ?? '', { max: 30 })
     + '<div class="field-row">' + field('Rol', 'role', '<select data-field>' + Object.entries(roleNames).map(([key, label]) => option(key, label, user.role)).join('') + '</select>')
     + field('Estado', 'active', '<select data-field>' + option('true', 'Activo', Boolean(user.active)) + option('false', 'Inactivo', Boolean(user.active)) + '</select>') + '</div>'
     + input(user.id ? 'Nueva contraseña (opcional)' : 'Contraseña (mínimo 12 caracteres)', 'password', '', { type: 'password', required: !user.id, max: 160, autocomplete: 'new-password' })
@@ -511,76 +538,223 @@ async function confirmTrip(action) {
     + submitButtons(arrival ? 'Guardar llegada' : 'Guardar salida') + '</form>');
 }
 
-async function startQrCamera() {
-  const video=document.querySelector('#qr-camera');
-  if(!video)return;
-  if(!('BarcodeDetector' in window)&&!window.jsQR){showFlash('No se cargó el lector QR. Usa el campo manual o revisa tu conexión.',true);return;}
-  if(!navigator.mediaDevices?.getUserMedia){showFlash('Este navegador no permite cámara. Usa el campo manual.',true);return;}
-  try{
-    const detector='BarcodeDetector' in window?new BarcodeDetector({formats:['qr_code']}):null;
-    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
-    state.cameraStream=stream;video.srcObject=stream;video.hidden=false;await video.play();
-    let isScanning = true;
-    const scan=async()=>{
-      if(!isScanning||!video.isConnected||video.hidden){stopQrCamera();return;}
-      try{
-        let value;
-        if(detector){
-          const codes=await detector.detect(video);
-          value=codes[0]?.rawValue;
-        }else if(video.videoWidth&&window.jsQR){
-          const canvas=document.querySelector('#qr-frame')||document.createElement('canvas');
-          const context=canvas.getContext('2d',{willReadFrequently:true});
-          canvas.width=video.videoWidth;canvas.height=video.videoHeight;
-          context.drawImage(video,0,0,canvas.width,canvas.height);
-          value=window.jsQR(context.getImageData(0,0,canvas.width,canvas.height).data,canvas.width,canvas.height,{inversionAttempts:'dontInvert'})?.data;
-        }
-        if(value&&value.trim()){
-          isScanning = false;
-          stopQrCamera();
-          if(navigator.vibrate)navigator.vibrate([100,50,100]);
-          await submitScan(value.trim());
-          return;
-        }
-      }catch{}
-      if(isScanning)setTimeout(scan,300);
-    };
-    void scan();
-  }catch{showFlash('No se pudo abrir la cámara. Revisa los permisos del navegador o usa el campo manual.',true);}
-}
+let cameraRun = 0;
+let cameraStarting = false;
+let scanPending = false;
+let scanAudio;
+let gpsRun = 0;
+let gpsTimer;
+let gpsStatus = '';
+const gpsOptions = { enableHighAccuracy: true, maximumAge: 0, timeout: 12_000 };
 
-function stopQrCamera(){
-  state.cameraStream?.getTracks().forEach(track=>track.stop());state.cameraStream=null;
-  const video=document.querySelector('#qr-camera');if(video){video.srcObject=null;video.hidden=true;}
-}
-
-async function submitScan(qrToken, action=state.scanAction) {
-  const resultBox=document.querySelector('#scan-result');
+async function synchronizeScreen() {
+  const wanted = () => !document.hidden && (state.page === 'mi-viaje' && state.ride?.qrToken
+    || state.user?.role === 'driver' && state.locationWatchId !== null);
+  if (!wanted()) {
+    await screenLock?.release().catch(() => {});
+    return;
+  }
+  if (screenRequest || (screenLock && !screenLock.released) || !navigator.wakeLock) return;
+  screenRequest = true;
   try {
-    const result=await api('driver/scan',{method:'POST',body:{qrToken,action}});
-    await refresh();render();
-    const actionText=action==='board'?'Abordaje registrado':'Bajada registrada';
-    const detail=(result.passenger?': '+result.passenger:'')+(result.stop?' en '+result.stop:'');
-    showFlash(actionText+detail+' a las '+clock.format(new Date(result.at))+'.');
-    const newBox=document.querySelector('#scan-result');
-    if(newBox){
-      newBox.innerHTML='<p class="scan-success" style="background:rgba(220,243,223,0.85);color:#185324;border:1px solid #a5e2b0;border-radius:12px;padding:12px;font-weight:600;margin-top:10px;">✅ '+actionText+detail+' ('+clock.format(new Date(result.at))+')</p>';
-    }
-  }catch(error){
-    showFlash(error.message,true);
-    if(resultBox){
-      resultBox.innerHTML='<p class="form-error" role="alert" style="margin-top:10px;">❌ '+escape(error.message)+'</p>';
-    }
+    screenLock = await navigator.wakeLock.request('screen');
+    if (!wanted()) await screenLock.release();
+  } catch {
+    // The device may disable wake locks to save battery.
+  } finally {
+    screenRequest = false;
   }
 }
 
-function toggleDriverLocation(button) {
-  if(state.locationWatchId!==null){navigator.geolocation.clearWatch(state.locationWatchId);state.locationWatchId=null;button.textContent='Compartir ubicación en vivo';showFlash('Se detuvo el envío de ubicación.');return;}
-  if(!navigator.geolocation){showFlash('Este dispositivo no ofrece ubicación.',true);return;}
-  if(!state.driverData?.assignments?.length){showFlash('Coordinación debe asignarte una ruta activa primero.',true);return;}
-  button.disabled=true;
-  state.locationWatchId=navigator.geolocation.watchPosition(async position=>{try{await api('driver/location',{method:'POST',body:{lat:position.coords.latitude,lng:position.coords.longitude}});const status=document.querySelector('#location-status');if(status)status.textContent='Ubicación compartida: '+clock.format(new Date())+' · transmisión activa.';}catch(error){showFlash(error.message,true);}},error=>{state.locationWatchId=null;button.disabled=false;showFlash('No se pudo obtener la ubicación. Revisa el permiso del navegador.',true);},{enableHighAccuracy:true,maximumAge:10000,timeout:15000});
-  button.disabled=false;button.textContent='Detener ubicación en vivo';showFlash('Ubicación en vivo activada mientras esta pantalla permanezca abierta.');
+function prepareScanAudio() {
+  const Audio = window.AudioContext || window.webkitAudioContext;
+  if (!Audio) return;
+  try {
+    scanAudio ??= new Audio();
+    void scanAudio.resume().catch(() => {});
+  } catch {}
+}
+
+function scanFeedback() {
+  navigator.vibrate?.(90);
+  if (scanAudio?.state !== 'running') return;
+  const oscillator = scanAudio.createOscillator();
+  const volume = scanAudio.createGain();
+  const now = scanAudio.currentTime;
+  oscillator.frequency.value = 930;
+  volume.gain.setValueAtTime(.14, now);
+  volume.gain.exponentialRampToValueAtTime(.001, now + .15);
+  oscillator.connect(volume).connect(scanAudio.destination);
+  oscillator.start(now);
+  oscillator.stop(now + .16);
+}
+
+async function startQrCamera() {
+  if (state.cameraStream || cameraStarting) { stopQrCamera(); return; }
+  if (!navigator.mediaDevices?.getUserMedia || !window.jsQR && !window.BarcodeDetector) {
+    showFlash('La cámara no está disponible. Puedes ingresar el código manualmente.', true);
+    return;
+  }
+  const video = main.querySelector('#qr-camera');
+  const canvas = main.querySelector('#qr-frame');
+  const toggle = main.querySelector('[data-action="scan-camera"] span');
+  const run = ++cameraRun;
+  cameraStarting = true;
+  const seen = new Map();
+  let detector;
+  try {
+    if (window.BarcodeDetector) {
+      try { detector = new window.BarcodeDetector({ formats: ['qr_code'] }); } catch {}
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    if (run !== cameraRun || !video.isConnected) { stream.getTracks().forEach((track) => track.stop()); return; }
+    state.cameraStream = stream;
+    video.srcObject = stream;
+    video.hidden = false;
+    await video.play();
+    if (run !== cameraRun) return;
+    toggle.textContent = 'Cerrar cámara';
+    stream.getVideoTracks().forEach((track) => track.addEventListener('ended', () => {
+      if (run === cameraRun) stopQrCamera();
+    }));
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    let previous = '';
+    let previousMode = state.scanAction;
+    const scan = async () => {
+      if (run !== cameraRun || !video.isConnected) return;
+      try {
+        let value;
+        if (detector && video.readyState >= 2) {
+          try { value = (await detector.detect(video))[0]?.rawValue; } catch { detector = null; }
+        }
+        if (!detector && video.videoWidth && window.jsQR) {
+          const width = Math.min(video.videoWidth, 720);
+          const height = Math.round(video.videoHeight * width / video.videoWidth);
+          if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+          context.drawImage(video, 0, 0, width, height);
+          value = window.jsQR(context.getImageData(0, 0, width, height).data, width, height, { inversionAttempts: 'dontInvert' })?.data;
+        }
+        if (run !== cameraRun) return;
+        const token = value?.trim() ?? '';
+        const mode = state.scanAction;
+        const key = mode + ':' + token;
+        const now = Date.now();
+        for (const [key, at] of seen) if (now - at > 3500) seen.delete(key);
+        if (token && (token !== previous || mode !== previousMode) && !seen.has(key) && !scanPending) {
+          previous = token;
+          previousMode = mode;
+          seen.set(key, now);
+          await submitScan(token);
+        } else if (!token) previous = '';
+      } catch {
+        // Keep the camera ready for the next frame.
+      }
+      if (run === cameraRun) setTimeout(scan, 190);
+    };
+    void scan();
+  } catch {
+    if (run !== cameraRun) return;
+    stopQrCamera();
+    showFlash('No se pudo abrir la cámara. Revisa los permisos o usa el campo manual.', true);
+  } finally {
+    if (run === cameraRun) cameraStarting = false;
+  }
+}
+
+function stopQrCamera() {
+  cameraRun++;
+  cameraStarting = false;
+  state.cameraStream?.getTracks().forEach((track) => track.stop());
+  state.cameraStream = null;
+  const video = main.querySelector('#qr-camera');
+  if (video) { video.srcObject = null; video.hidden = true; }
+  const label = main.querySelector('[data-action="scan-camera"] span');
+  if (label) label.textContent = 'Abrir cámara';
+}
+
+async function submitScan(qrToken) {
+  if (scanPending) return false;
+  scanPending = true;
+  const user = state.user;
+  const action = state.scanAction;
+  const stopId = Number(main.querySelector('#scan-stop')?.value) || null;
+  const resultBox = main.querySelector('#scan-result');
+  try {
+    const result = await api('driver/scan', { method: 'POST', body: { qrToken, action, stopId } });
+    if (state.user?.id !== user?.id) return true;
+    scanFeedback();
+    const title = action === 'board' ? 'Abordaje registrado' : 'Bajada registrada';
+    const detail = title + ' · ' + result.passenger + ' · ' + result.stop;
+    if (resultBox) resultBox.innerHTML = '<p class="scan-success">' + icon('check', 18) + escape(detail) + '</p>';
+    void refreshLive();
+    return true;
+  } catch (error) {
+    if (resultBox) resultBox.innerHTML = '<p class="form-error">' + escape(error.message) + '</p>';
+    return false;
+  } finally {
+    scanPending = false;
+  }
+}
+
+function updateLocationStatus() {
+  const status = main.querySelector('#location-status');
+  const button = main.querySelector('[data-action="resume-gps"]');
+  if (status && state.driverData?.shift) {
+    const updated = state.driverData.shift.location?.updatedAt;
+    status.textContent = gpsStatus || (updated ? 'Última ubicación a las ' + clock.format(new Date(updated)) + '. Activa GPS para transmitir desde este dispositivo.'
+      : 'Activa el GPS y mantén la app visible durante el turno.');
+  }
+  if (button) button.disabled = state.locationWatchId !== null;
+}
+
+function stopGps() {
+  gpsRun++;
+  clearInterval(gpsTimer);
+  if (state.locationWatchId !== null) navigator.geolocation.clearWatch(state.locationWatchId);
+  state.locationWatchId = null;
+  gpsStatus = '';
+  updateLocationStatus();
+  void synchronizeScreen();
+}
+
+function startGps() {
+  const tripId = state.driverData?.shift?.tripId;
+  if (!tripId || state.locationWatchId !== null) return;
+  if (!navigator.geolocation) { showFlash('Este dispositivo no ofrece ubicación.', true); return; }
+  const run = ++gpsRun;
+  let lastSent = 0;
+  let requestPending = false;
+  gpsStatus = 'Buscando señal GPS…';
+  const send = async (position) => {
+    if (run !== gpsRun || document.hidden || requestPending || Date.now() - lastSent < 5000) return;
+    const { latitude: lat, longitude: lng, accuracy, speed } = position.coords;
+    requestPending = true;
+    try {
+      await api('driver/location', { method: 'POST', body: { tripId, lat, lng, accuracy, speed, measuredAt: position.timestamp } });
+      if (run !== gpsRun) return;
+      lastSent = Date.now();
+      gpsStatus = 'GPS activo · Último envío a las ' + clock.format(new Date(lastSent)) + '.';
+    } catch (error) {
+      if (run !== gpsRun) return;
+      gpsStatus = 'GPS pendiente · ' + error.message;
+      if (error.status === 401) void boot();
+    } finally {
+      requestPending = false;
+      updateLocationStatus();
+    }
+  };
+  const unavailable = (error) => {
+    if (run !== gpsRun) return;
+    if (error.code === 1) stopGps();
+    gpsStatus = error.code === 1 ? 'Permite la ubicación en el navegador y vuelve a activar el GPS.' : 'Buscando señal GPS…';
+    updateLocationStatus();
+  };
+  state.locationWatchId = navigator.geolocation.watchPosition(send, unavailable, gpsOptions);
+  gpsTimer = setInterval(() => {
+    if (!document.hidden && Date.now() - lastSent >= 8000) navigator.geolocation.getCurrentPosition(send, unavailable, gpsOptions);
+  }, 12_000);
+  updateLocationStatus();
+  void synchronizeScreen();
 }
 
 document.addEventListener('submit', async (event) => {
@@ -600,7 +774,10 @@ document.addEventListener('submit', async (event) => {
     switch (form.dataset.form) {
       case 'login': {
         const result = await api('login', { method: 'POST', body: data });
+        storeLocal(passKey, null);
+        storeLocal(pendingLogoutKey, null);
         state.user = result.user;
+        history.replaceState(null, '', location.pathname + location.search + '#' + roleNavigation()[0][0]);
         message = 'Sesión iniciada.';
         break;
       }
@@ -610,8 +787,24 @@ document.addEventListener('submit', async (event) => {
         await api('my/ride',{method:'POST',body:{routeId:Number(data.routeId),stopId:Number(data.stopId)}});message='Ruta y parada reservadas.';break;
       case 'vehicle':
         await api('driver/vehicle',{method:'POST',body:data});message='Unidad registrada.';break;
+      case 'shift':
+        state.shiftRouteId = Number(data.routeId);
+        state.driverData = await api('driver/shift', { method: 'POST', body: { routeId: state.shiftRouteId, action: 'departure' } });
+        render();
+        startGps();
+        showFlash('Turno iniciado.');
+        return;
       case 'scan':
-        await submitScan(data.qrToken,form.dataset.scanAction);return;
+        if (await submitScan(data.qrToken)) form.reset();
+        return;
+      case 'history-search':
+        state.historyQuery = data.query.trim();
+        await ops.loadHistory();
+        return;
+      case 'ridership':
+        state.ridershipDate = data.date;
+        await ops.loadRidership();
+        return;
       case 'route': {
         const stops = [...form.querySelectorAll('.edit-stop')].map((node) => {
           const get = (name) => node.querySelector('[name="' + name + '"]').value;
@@ -639,9 +832,10 @@ document.addEventListener('submit', async (event) => {
     if(showLoginAfterRegister)accountDialog();
     await refresh();
     render();
+    connectLive();
     showFlash(message);
   } catch (error) {
-    if (dialog.open) {
+    if (errorNode.isConnected) {
       errorNode.textContent = error.message;
       errorNode.hidden = false;
     } else showFlash(error.message, true);
@@ -674,16 +868,7 @@ document.addEventListener('click', async (event) => {
         form.querySelector('[type="submit"]').focus();
         break;
       }
-      case 'logout':
-        if(state.locationWatchId!==null){navigator.geolocation.clearWatch(state.locationWatchId);state.locationWatchId=null;}
-        await api('logout', { method: 'POST' });
-        dialog.close();
-        state.user = null;
-        await refresh();
-        if (state.page === 'gestion') location.hash = '#inicio';
-        render();
-        showFlash('Sesión cerrada.');
-        break;
+      case 'logout': button.disabled = true; await logout(); break;
       case 'select-route':
       case 'view-route':
         if (state.selectedId !== id) {
@@ -698,9 +883,22 @@ document.addEventListener('click', async (event) => {
       case 'stop': updateStop(Number(button.dataset.index)); break;
       case 'map-refresh': await state.map?.refresh(); break;
       case 'trip': await confirmTrip(button.dataset.trip); break;
-      case 'scan-mode': state.scanAction=state.scanAction==='board'?'alight':'board';driverPage();break;
-      case 'scan-camera': await startQrCamera();break;
-      case 'location': toggleDriverLocation(button);break;
+      case 'scan-mode': ops.setScanMode(button.dataset.mode); break;
+      case 'scan-camera': prepareScanAudio(); await startQrCamera(); break;
+      case 'resume-gps': startGps(); break;
+      case 'end-shift': {
+        const routeId = state.driverData?.shift?.routeId;
+        if (routeId == null) break;
+        button.disabled = true;
+        state.driverData = await api('driver/shift', { method: 'POST', body: { routeId, action: 'arrival' } });
+        stopGps();
+        render();
+        showFlash('Turno finalizado.');
+        break;
+      }
+      case 'push-toggle': await ops.togglePush(button); break;
+      case 'radar-unit': ops.chooseUnit(id); break;
+      case 'history-more': button.disabled = true; await ops.loadHistory(id); button.disabled = false; break;
       case 'admin-tab':
         state.adminTab = tab;
         adminPage();
@@ -772,6 +970,7 @@ document.addEventListener('change', (event) => {
     const route=(state.ride?.routes??state.routes).find(r=>String(r.id)===target.value);
     target.form.elements.stopId.innerHTML=(route?.stops??[]).map(s=>option(s.id,s.name)).join('');
   }
+  if (target.id === 'scan-stop') target.dataset[state.scanAction] = target.value;
 });
 
 window.addEventListener('hashchange', () => {
@@ -780,12 +979,20 @@ window.addEventListener('hashchange', () => {
   window.scrollTo(0, 0);
   main.focus({ preventScroll: true });
   if (state.page === 'avisos') void refreshNotices();
+  void refreshLive();
 });
 window.addEventListener('beforeinstallprompt', (event) => {
   event.preventDefault();
   installPrompt = event;
 });
-window.addEventListener('online', () => { void boot(); });
+window.addEventListener('online', () => { if (state.offline || !state.user) void boot(); else void refreshLive(); });
+window.addEventListener('offline', () => {
+  if (passengerRoles.includes(state.user?.role)) {
+    state.offline = true;
+    state.tracking = null;
+    render();
+  }
+});
 
 let noticeRequest = 0;
 async function refreshNotices() {
@@ -804,24 +1011,167 @@ async function refreshNotices() {
     // Keep the last loaded notices when the connection drops.
   }
 }
-document.addEventListener('visibilitychange', () => { void refreshNotices(); });
-setInterval(refreshNotices, 60_000);
-setInterval(async()=>{
-  if(!state.user||document.hidden||dialog.open||!navigator.onLine)return;
-  try{await refresh();if(state.page==='gestion'||state.page==='chofer'||state.page==='mi-viaje')render();}catch{}
-},20000);
+let liveSource;
+let liveBusy = false;
+let liveQueued = false;
+let liveRetry;
+let booting;
 
-async function boot() {
+async function refreshLive() {
+  if (!state.user || document.hidden || !navigator.onLine || state.offline) return;
+  if (liveBusy) { liveQueued = true; return; }
+  const user = state.user;
+  const page = state.page;
+  liveBusy = true;
+  try {
+    if (user.role === 'driver') {
+      const driver = await api('driver/state');
+      if (user !== state.user) return;
+      const switched = driver.shift?.tripId !== state.driverData?.shift?.tripId;
+      state.driverData = driver;
+      if (!driver.shift && state.locationWatchId !== null) stopGps();
+      if (state.page === 'chofer') {
+        if (switched) render();
+        else { ops.updateDriver(); updateLocationStatus(); }
+      }
+    } else if (user.role === 'admin' && page === 'control') {
+      const { units } = await api('admin/radar');
+      if (user !== state.user) return;
+      state.units = units;
+      if (state.page === page) ops.updateRadar();
+    } else if (passengerRoles.includes(user.role)) {
+      const { tracking } = await api('my/tracking');
+      if (user !== state.user) return;
+      const previous = state.tracking;
+      state.tracking = tracking;
+      if (previous?.reservationId !== tracking?.reservationId || previous?.stop.id !== tracking?.stop.id
+        || previous?.boardedAt !== tracking?.boardedAt || previous?.alightedAt !== tracking?.alightedAt) {
+        const ride = await api('my/ride');
+        if (user !== state.user) return;
+        state.ride = ride;
+        savePass(user, ride);
+        if (state.page === 'rastreo') render();
+        if (state.page === 'historial') void ops.loadHistory();
+        const passReservation = main.querySelector('#pass-reservation');
+        if (passReservation) passReservation.innerHTML = ops.passStatus();
+      } else if (state.page === 'rastreo') ops.updateTracking();
+    }
+  } catch (error) {
+    if (error.status === 401 && state.user === user) void boot();
+    else expireLocations();
+  } finally {
+    liveBusy = false;
+    if (liveQueued) { liveQueued = false; void refreshLive(); }
+  }
+}
+
+function expireLocations() {
+  const expired = (unit) => unit?.location && Date.now() - Date.parse(unit.location.updatedAt) > 60_000;
+  if (state.page === 'control' && state.units.some(expired)) {
+    state.units = state.units.map((unit) => expired(unit) ? { ...unit, location: null } : unit);
+    ops.updateRadar();
+  }
+  if (state.page === 'rastreo' && expired(state.tracking?.unit)) {
+    state.tracking = { ...state.tracking, etaMinutes: null, stopsAway: null, unit: { ...state.tracking.unit, location: null } };
+    ops.updateTracking();
+  }
+}
+
+function connectLive() {
+  liveSource?.close();
+  clearTimeout(liveRetry);
+  if (!state.user || state.offline || !('EventSource' in window)) return;
+  liveSource = new EventSource('/api/live');
+  liveSource.addEventListener('refresh', () => {
+    clearTimeout(liveRetry);
+    liveRetry = setTimeout(refreshLive, 160);
+  });
+}
+
+async function logout() {
+  stopQrCamera();
+  stopGps();
+  liveSource?.close();
+  storeLocal(passKey, null);
+  storeLocal(pendingLogoutKey, {});
+  const registration = await navigator.serviceWorker?.getRegistration().catch(() => null);
+  const subscription = await registration?.pushManager?.getSubscription().catch(() => null);
+  const body = { endpoint: subscription?.endpoint };
+  storeLocal(pendingLogoutKey, body);
+  await subscription?.unsubscribe().catch(() => {});
+  try {
+    await api('logout', { method: 'POST', body });
+    storeLocal(pendingLogoutKey, null);
+  } catch (error) {
+    if (error.status) showFlash(error.message, true);
+  }
+  dialog.close();
+  state.user = null;
+  state.ride = null;
+  state.driverData = null;
+  state.units = [];
+  state.tracking = null;
+  state.admin = null;
+  state.notices = [];
+  state.historyQuery = '';
+  state.scanAction = 'board';
+  history.replaceState(null, '', location.pathname + location.search);
+  await refresh().catch(() => {});
+  render();
+  showFlash('Sesión cerrada.');
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopQrCamera();
+  void synchronizeScreen();
+  void refreshNotices();
+  void refreshLive();
+});
+setInterval(refreshNotices, 60_000);
+setInterval(refreshLive, 15_000);
+setInterval(expireLocations, 15_000);
+
+function boot() {
+  if (booting) return booting;
+  booting = loadApp().finally(() => { booting = null; });
+  return booting;
+}
+
+async function loadApp() {
   main.setAttribute('aria-busy', 'true');
-  const [config, session] = await Promise.allSettled([api('config'), api('session')]);
+  const logoutPending = getStored(pendingLogoutKey);
+  if (logoutPending) {
+    try {
+      await api('logout', { method: 'POST', body: logoutPending });
+      storeLocal(pendingLogoutKey, null);
+    } catch {
+      // Never restore a locally closed session while the browser is offline.
+    }
+  }
+  const [config, session] = await Promise.allSettled([api('config'), getStored(pendingLogoutKey) ? null : api('session')]);
   if (config.status === 'fulfilled') state.config = config.value;
-  state.user = session.status === 'fulfilled' ? session.value.user : null;
+  const cached = session.status === 'rejected' ? getStored(passKey) : null;
+  const user = session.status === 'fulfilled' ? session.value?.user : cached;
+  if (state.user?.id !== user?.id && state.locationWatchId !== null) stopGps();
+  state.user = user || null;
+  if (cached && passengerRoles.includes(cached.role) && typeof cached.qrToken === 'string') {
+    state.ride = { qrToken: cached.qrToken };
+    state.passSaved = true;
+    state.tracking = null;
+    state.offline = true;
+    state.hasData = true;
+    render();
+    connectLive();
+    return;
+  }
+  if (!state.user || !passengerRoles.includes(state.user.role)) savePass(null, null);
   try {
     await refresh();
   } catch (error) {
     if (state.hasData) showFlash(error.message, true);
   }
   render();
+  connectLive();
 }
 
 if ('serviceWorker' in navigator) {
