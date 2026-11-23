@@ -4,18 +4,11 @@
 
 Este proyecto incluye `Dockerfile` en la raíz. Railway puede construirlo directamente desde el repositorio; el contenedor escucha en `0.0.0.0:3000`.
 
-## 1. Subir la nueva identidad a GitHub
+## 1. Publicar cambios en producción
 
-En PowerShell, desde la carpeta del proyecto:
+El servicio `TRANSPORTES-UPTEX` de Railway sigue la rama `main` del repositorio `alexsdfgr/TRANSPORTES-UPTEX`. Después de verificar los cambios de la aplicación, súbelos a `main`. Railway inicia el despliegue automáticamente. Comprueba que el despliegue figure como exitoso y que `/api/health` responda.
 
-```powershell
-Set-Location 'C:\Users\aleja\OneDrive\Documents\TRANSPORTES UPTEX'
-git add public/app.js public/index.html public/manifest.webmanifest public/styles.css public/sw.js public/uptex-logo.jpg
-git commit -m "Actualizar marca UPTex con identidad verde"
-git push origin main
-```
-
-El entorno de edición puede bloquear escrituras a `.git`; si Git vuelve a informar de acceso denegado, abre una terminal normal de Windows en esta carpeta y corre allí los mismos comandos.
+Las migraciones de SQLite registran en Railway la ruta del respaldo verificado. Cada migración de datos debe respaldar la base antes de modificarla y comprobar su integridad antes de confirmar los cambios.
 
 ## 2. Crear el servicio
 

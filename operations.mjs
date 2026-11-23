@@ -120,7 +120,8 @@ export function createOperations(db, check) {
     const reservation = db.prepare(`SELECT x.id AS reservationId,x.route_id AS routeId,s.id,s.name,s.lat,s.lng,
       b.boarded_at AS boardedAt,b.alighted_at AS alightedAt
       FROM reservations x JOIN stops s ON s.id=x.stop_id LEFT JOIN boardings b ON b.reservation_id=x.id
-      WHERE x.user_id=? AND x.service_date=? AND x.status='reserved'`).get(userId, localDate());
+      WHERE x.user_id=? AND x.service_date=? AND x.status IN ('reserved','completed')
+      ORDER BY (x.status='reserved') DESC,x.id DESC LIMIT 1`).get(userId, localDate());
     if (!reservation) return null;
     const { id, name, lat, lng, boardedAt, alightedAt, routeId, reservationId } = reservation;
     const stop = { id, name, lat, lng };
@@ -140,7 +141,7 @@ export function createOperations(db, check) {
       s.lat,s.lng,b.boarded_at AS boardedAt,b.alighted_at AS alightedAt
       FROM reservations x JOIN users u ON u.id=x.user_id JOIN routes r ON r.id=x.route_id
       JOIN stops s ON s.id=x.stop_id LEFT JOIN boardings b ON b.reservation_id=x.id
-      WHERE x.service_date=? AND x.status='reserved' AND u.active=1
+      WHERE x.service_date=? AND x.status IN ('reserved','completed') AND u.active=1
       AND (r.driver_id=? OR r.id=?) AND (b.driver_id IS NULL OR b.driver_id=?) ORDER BY s.position,u.name`)
       .all(localDate(), driverId, unit?.routeId ?? null, driverId);
     const nextStop = unit?.nextStop && {

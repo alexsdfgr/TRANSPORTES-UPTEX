@@ -28,6 +28,12 @@ export function verifyPassword(password, hash = dummyHash) {
   return timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(actual, 'hex'));
 }
 
+const reservationFields = `
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), route_id INTEGER NOT NULL REFERENCES routes(id),
+    stop_id INTEGER NOT NULL REFERENCES stops(id), service_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'reserved',
+    created_at TEXT NOT NULL
+`;
+
 const schema = `
   PRAGMA foreign_keys = ON;
   PRAGMA journal_mode = WAL;
@@ -46,11 +52,7 @@ const schema = `
     name TEXT NOT NULL, plate TEXT NOT NULL UNIQUE, model TEXT NOT NULL DEFAULT '', capacity INTEGER NOT NULL DEFAULT 20,
     active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
   );
-  CREATE TABLE IF NOT EXISTS reservations (
-    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), route_id INTEGER NOT NULL REFERENCES routes(id),
-    stop_id INTEGER NOT NULL REFERENCES stops(id), service_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'reserved',
-    created_at TEXT NOT NULL, UNIQUE(user_id,service_date)
-  );
+  CREATE TABLE IF NOT EXISTS reservations (${reservationFields});
   CREATE TABLE IF NOT EXISTS boardings (
     id INTEGER PRIMARY KEY, reservation_id INTEGER NOT NULL REFERENCES reservations(id),
     driver_id INTEGER NOT NULL REFERENCES users(id), vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
@@ -105,9 +107,9 @@ const schema = `
   );
 `;
 
-function backupBeforeMigration(db, path) {
+function backupBeforeMigration(db, path, legacyReservations) {
   const users = db.prepare('PRAGMA table_info(users)').all();
-  if (!users.length || users.some(({ name }) => name === 'matricula')) return;
+  if (!legacyReservations && (!users.length || users.some(({ name }) => name === 'matricula'))) return;
   const directory = mkdtempSync(join(dirname(path), '.uptex-previo-'));
   chmodSync(directory, 0o700);
   const snapshot = join(directory, basename(path));
@@ -127,8 +129,39 @@ function backupBeforeMigration(db, path) {
 export function openStore(path, { demo, adminEmail, adminPassword }) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
-  if (path !== ':memory:') backupBeforeMigration(db, path);
+  const legacyReservations = db.prepare('PRAGMA index_list(reservations)').all().some(({ origin }) => origin === 'u');
+  if (path !== ':memory:') backupBeforeMigration(db, path, legacyReservations);
   db.exec(schema);
+  if (legacyReservations) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      const counts = transaction(db, () => {
+        const count = (table) => db.prepare(`SELECT count(*) AS total FROM ${table}`).get().total;
+        const before = { reservations: count('reservations'), boardings: count('boardings'), notices: count('proximity_notices') };
+        db.exec(`CREATE TABLE reservations_new (${reservationFields});
+          INSERT INTO reservations_new
+          SELECT id,user_id,route_id,stop_id,service_date,
+            CASE WHEN status='reserved' AND EXISTS (
+              SELECT 1 FROM boardings b WHERE b.reservation_id=reservations.id AND b.alighted_at IS NOT NULL
+            ) AND NOT EXISTS (
+              SELECT 1 FROM boardings b WHERE b.reservation_id=reservations.id AND b.alighted_at IS NULL
+            ) THEN 'completed' ELSE status END,created_at FROM reservations;
+          DROP TABLE reservations;
+          ALTER TABLE reservations_new RENAME TO reservations;
+          CREATE INDEX reservations_by_route ON reservations(route_id, service_date, stop_id);
+          CREATE UNIQUE INDEX reservations_active_by_day ON reservations(user_id,service_date) WHERE status='reserved';`);
+        if (db.prepare('PRAGMA foreign_key_check').get()) throw new Error('La migración de reservaciones presentó vínculos inválidos.');
+        if (before.reservations !== count('reservations') || before.boardings !== count('boardings') || before.notices !== count('proximity_notices')) {
+          throw new Error('La migración de reservaciones cambió la cantidad de registros.');
+        }
+        return before;
+      });
+      console.info(`Migración de SQLite verificada: ${counts.reservations} reservaciones, ${counts.boardings} registros de abordaje y ${counts.notices} avisos conservados.`);
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON');
+    }
+  }
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS reservations_active_by_day ON reservations(user_id,service_date) WHERE status='reserved'");
   transaction(db, () => {
     const additions = {
       stops: { active: 'INTEGER NOT NULL DEFAULT 1' },

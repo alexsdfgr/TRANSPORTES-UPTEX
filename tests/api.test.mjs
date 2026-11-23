@@ -156,6 +156,7 @@ test('Rastreo, aforo y manifiesto se actualizan con el turno y los escaneos real
   const { qrToken: teacherToken } = await get('my/ride', teacher);
   const scan = (action, token, stop) => send('driver/scan', { qrToken: token, action, stopId: stop }, driver);
   assert.equal((await scan('board', qrToken)).status, 200);
+  assert.equal((await send('my/ride', reserve, student)).status, 409);
   assert.equal((await scan('board', qrToken)).status, 409);
   assert.equal((await scan('board', teacherToken)).status, 409);
   assert.equal((await shift('arrival')).status, 409);
@@ -181,6 +182,15 @@ test('Rastreo, aforo y manifiesto se actualizan con el turno y los escaneos real
   assert.equal(report.groups[0].routeCode, route.code);
   assert.equal((await shift('arrival')).status, 200);
   assert.deepEqual((await get('admin/radar', admin)).units, []);
+  assert.ok((await get('my/tracking', student)).tracking.alightedAt);
+  assert.equal((await send('my/ride', reserve, student)).status, 409);
+  const nextRoute = (await get('catalog')).routes.find((item) => item.code === 'R02');
+  assert.equal((await send('my/ride', { routeId: nextRoute.id, stopId: nextRoute.stops[0].id }, student)).status, 200);
+  const nextRide = await get('my/ride', student);
+  assert.equal(nextRide.qrToken, qrToken);
+  assert.equal(nextRide.reservation.routeId, nextRoute.id);
+  assert.equal((await get('my/tracking', student)).tracking.alightedAt, null);
+  assert.deepEqual((await get('my/history', student)).history, [record]);
   assert.equal((await send('driver/vehicle', { name: 'Combi 02', plate: 'TEX-020', capacity: 1 }, driver)).status, 200);
   assert.equal((await get('my/history', student)).history[0].plate, 'TEX-010');
 });

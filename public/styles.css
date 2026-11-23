@@ -1185,6 +1185,7 @@ form[data-form] { display: grid; gap: 13px; }
 #pass-reservation:empty { display: none; }
 #pass-reservation { border-top: 1px solid var(--border-subtle); padding-top: 12px; width: 100%; }
 #pass-reservation .button { width: 100%; }
+#pass-reservation .pass-reservation + .button { margin-top: 12px; }
 .pass-reservation { justify-content: center; }
 #passenger-qr {
   display: block;

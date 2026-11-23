@@ -1,4 +1,4 @@
-const cacheName = 'uptex-v11';
+const cacheName = 'uptex-v12';
 const shell = ['/', '/styles.css', '/app.js', '/operations.js', '/maps.js', '/icons.js', '/qrcode.min.js', '/jsqr.js', '/manifest.webmanifest', '/uptex-logo.jpg', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (event) => {

@@ -12,7 +12,9 @@ export function createOperationPages({ main, state, escape, option, empty, input
     const reservation = state.ride?.reservation;
     const booked = reservation && '<div class="pass-reservation">' + routeBadge({ ...reservation, color: state.routes.find((r) => r.id === reservation.routeId)?.color ?? 'teal' })
       + '<div><b>' + escape(reservation.route) + '</b><p>' + escape(reservation.stop) + '</p></div></div>';
-    return booked || (state.offline ? '' : '<a class="button primary" href="#rastreo">' + icon('pin', 17) + 'Reservar viaje</a>');
+    if (state.offline || (reservation?.boardedAt && !reservation.alightedAt)) return booked || '';
+    const action = reservation?.alightedAt ? 'Nuevo viaje' : reservation ? 'Cambiar ruta o parada' : 'Reservar viaje';
+    return (booked || '') + '<a class="button primary" href="#rastreo">' + icon('pin', 17) + action + '</a>';
   }
 
   function passengerPage() {
@@ -69,28 +71,32 @@ export function createOperationPages({ main, state, escape, option, empty, input
   function trackingPage() {
     const reservation = state.ride?.reservation;
     const routes = state.ride?.routes ?? state.routes;
+    const completed = Boolean(reservation?.alightedAt);
+    const available = routes.filter((item) => !item.trip?.arrivedAt);
     const route = routes.find((item) => item.id === reservation?.routeId);
-    const selected = route ?? routes[0];
-    const options = (selected?.stops ?? []).map((stop) => option(stop.id, stop.name, reservation?.stopId)).join('');
+    const selected = available.find((item) => item.id === reservation?.routeId) ?? available[0];
+    const options = (selected?.stops ?? []).map((stop) => option(stop.id, stop.name, completed ? null : reservation?.stopId)).join('');
     const form = '<form data-form="reservation"><label class="field"><span>Ruta</span><select name="routeId" data-passenger-route required>'
-      + routes.map((item) => option(item.id, item.code + ' · ' + item.name, selected?.id)).join('')
+      + available.map((item) => option(item.id, item.code + ' · ' + item.name, selected?.id)).join('')
       + '</select></label><label class="field"><span>Parada de abordaje</span><select name="stopId" required>' + options
       + '</select></label><p class="form-error" role="alert" hidden></p><button class="button primary" type="submit">'
-      + (reservation ? 'Actualizar reservación' : 'Reservar para hoy') + '</button></form>';
+      + (completed ? 'Reservar nuevo viaje' : reservation ? 'Actualizar reservación' : 'Reservar para hoy') + '</button></form>';
     const title = heading('¿Dónde viene mi combi?', 'Rastreo y reservación de hoy');
     if (state.offline) {
       main.innerHTML = title + '<section class="card">' + empty('pin', 'Conéctate para ver el rastreo y reservar.') + '</section>';
       return;
     }
     main.innerHTML = title + '<div class="ops-stack">'
-      + (route ? '<section class="card map-card tracking-card"><div id="tracking-status" aria-live="polite">' + trackingMarkup(state.tracking) + '</div>'
+      + (completed ? '<section class="card tracking-card">' + trackingMarkup(state.tracking) + '</section>' : '')
+      + (!reservation?.boardedAt || completed ? '<section class="card ops-card"><h2>'
+        + (completed ? 'Nuevo viaje' : reservation ? 'Mi reservación' : 'Reserva tu ruta') + '</h2>'
+        + (available.length ? form : empty('route', 'No hay rutas disponibles para reservar hoy.')) + '</section>' : '')
+      + (route && !completed ? '<section class="card map-card tracking-card"><div id="tracking-status" aria-live="polite">' + trackingMarkup(state.tracking) + '</div>'
         + liveMap('Mapa de seguimiento de tu combi') + '</section>' : '')
-      + (!reservation?.boardedAt ? '<section class="card ops-card"><h2>' + (reservation ? 'Mi reservación' : 'Reserva tu ruta') + '</h2>'
-        + (routes.length ? form : empty('route', 'Aún no hay rutas publicadas.')) + '</section>' : '')
       + (state.config.pushKey && 'PushManager' in window ? '<section class="card ops-card alert-settings"><div><h2>Alerta de proximidad</h2>'
         + '<p>A 5 minutos o 2 paradas de tu destino de abordaje.</p></div><button type="button" class="button secondary" data-action="push-toggle" data-enabled="false">'
         + icon('bell', 16) + '<span>Activar avisos</span></button></section>' : '') + '</div>';
-    if (route) {
+    if (route && !completed) {
       const index = route.stops.findIndex((stop) => stop.id === reservation.stopId || stop.name === reservation.stop);
       mountLiveMap([route], route, Math.max(0, index));
       updateTracking();

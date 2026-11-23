@@ -270,7 +270,7 @@ export function createApp({
       WHERE p.qr_token=?`).get(token);
     check(passenger, 'Código QR no reconocido.', 404);
     const now = new Date().toISOString();
-    const aboard = db.prepare(`SELECT b.id,b.driver_id AS driverId,x.route_id AS routeId FROM boardings b
+    const aboard = db.prepare(`SELECT b.id,b.reservation_id AS reservationId,b.driver_id AS driverId,x.route_id AS routeId FROM boardings b
       JOIN reservations x ON x.id=b.reservation_id WHERE x.user_id=? AND b.alighted_at IS NULL ORDER BY b.id DESC`).all(passenger.id);
     if (action === 'alight') {
       const boarding = aboard.find((item) => item.driverId === user.id || user.role === 'admin');
@@ -280,6 +280,7 @@ export function createApp({
         : db.prepare('SELECT id,name FROM stops WHERE id=? AND route_id=? AND active=1').get(body.stopId, boarding.routeId);
       check(stop, 'Selecciona una parada de bajada de esta ruta.');
       db.prepare('UPDATE boardings SET alighted_at=?,alight_stop_id=? WHERE id=?').run(now, stop.id, boarding.id);
+      db.prepare("UPDATE reservations SET status='completed' WHERE id=?").run(boarding.reservationId);
       return { registered: true, action, at: now, passenger: passenger.name, stop: stop.name, routeId: boarding.routeId };
     }
     check(passenger.active && passengerRoles.includes(passenger.role), 'El pase del pasajero no está activo.', 403);
@@ -376,7 +377,8 @@ export function createApp({
         FROM reservations x JOIN routes r ON r.id=x.route_id JOIN stops s ON s.id=x.stop_id LEFT JOIN boardings b ON b.reservation_id=x.id
         LEFT JOIN users du ON du.id=COALESCE(b.driver_id,r.driver_id)
         LEFT JOIN vehicles v ON v.id=b.vehicle_id OR (b.id IS NULL AND v.driver_id=r.driver_id AND v.active=1)
-        WHERE x.user_id=? AND x.service_date=? AND x.status='reserved'`).get(user.id,localDate());
+        WHERE x.user_id=? AND x.service_date=? AND x.status IN ('reserved','completed')
+        ORDER BY (x.status='reserved') DESC,x.id DESC LIMIT 1`).get(user.id,localDate());
       return json(res,200,{qrToken:profile?.qrToken??null,reservation:reservation??null,routes:readRoutes(db)});
     }
     if (method === 'POST' && pathname === '/api/my/ride') {
@@ -385,14 +387,19 @@ export function createApp({
       check(db.prepare("SELECT id FROM routes WHERE id=? AND status='active'").get(routeId),'Selecciona una ruta activa.');
       check(db.prepare('SELECT id FROM stops WHERE id=? AND route_id=? AND active=1').get(stopId,routeId),'Selecciona una parada de esa ruta.');
       const today = localDate();
-      const current = db.prepare(`SELECT x.id,x.route_id AS routeId,x.stop_id AS stopId,b.id AS boardingId FROM reservations x
-        LEFT JOIN boardings b ON b.reservation_id=x.id WHERE x.user_id=? AND x.service_date=?`).get(user.id, today);
-      const id = transaction(db, () => {
-        check(!current?.boardingId, 'No puedes cambiar la reservación después de abordar.', 409);
+      const { id, current } = transaction(db, () => {
+        check(!db.prepare(`SELECT 1 FROM boardings b JOIN reservations x ON x.id=b.reservation_id
+          WHERE x.user_id=? AND b.alighted_at IS NULL`).get(user.id), 'Puedes reservar otro viaje después de registrar tu bajada.', 409);
+        check(!db.prepare('SELECT 1 FROM trips WHERE route_id=? AND date=? AND arrived_at IS NOT NULL').get(routeId, today),
+          'Esta ruta ya terminó su turno de hoy. Elige otra ruta disponible.', 409);
+        const current = db.prepare(`SELECT id,route_id AS routeId,stop_id AS stopId FROM reservations
+          WHERE user_id=? AND service_date=? AND status='reserved'`).get(user.id, today);
         if (current && (current.routeId !== routeId || current.stopId !== stopId)) db.prepare('DELETE FROM proximity_notices WHERE reservation_id=?').run(current.id);
-        return db.prepare(`INSERT INTO reservations(user_id,route_id,stop_id,service_date,created_at) VALUES(?,?,?,?,?)
-          ON CONFLICT(user_id,service_date) DO UPDATE SET route_id=excluded.route_id,stop_id=excluded.stop_id,status='reserved',created_at=excluded.created_at
-          RETURNING id`).get(user.id, routeId, stopId, today, new Date().toISOString()).id;
+        const { id } = db.prepare(`INSERT INTO reservations(user_id,route_id,stop_id,service_date,created_at) VALUES(?,?,?,?,?)
+          ON CONFLICT(user_id,service_date) WHERE status='reserved'
+          DO UPDATE SET route_id=excluded.route_id,stop_id=excluded.stop_id,created_at=excluded.created_at
+          RETURNING id`).get(user.id, routeId, stopId, today, new Date().toISOString());
+        return { id, current };
       });
       if (current && current.routeId !== routeId) announce(current.routeId);
       announce(routeId, user.id);
@@ -501,7 +508,7 @@ export function createApp({
           FROM reservations x JOIN users u ON u.id=x.user_id JOIN routes r ON r.id=x.route_id JOIN stops s ON s.id=x.stop_id
           LEFT JOIN boardings b ON b.reservation_id=x.id LEFT JOIN users d ON d.id=COALESCE(b.driver_id,r.driver_id)
           LEFT JOIN vehicles v ON v.id=b.vehicle_id OR (b.id IS NULL AND v.driver_id=r.driver_id AND v.active=1)
-          WHERE x.service_date=? AND x.status='reserved' ORDER BY r.code,s.position,u.name`).all(localDate()),
+          WHERE x.service_date=? AND x.status IN ('reserved','completed') ORDER BY r.code,s.position,u.name`).all(localDate()),
       });
     }
     const routeMatch = pathname.match(/^\/api\/admin\/routes(?:\/([1-9]\d*))?$/);
